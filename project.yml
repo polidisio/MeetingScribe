@@ -26,6 +26,7 @@ targets:
         excludes:
           - "*.xcodeproj"
           - "*.xcworkspace"
+          - "**/MeetingScribeTests/**"
     settings:
       base:
         INFOPLIST_FILE: MeetingScribe/Info.plist
@@ -33,16 +34,42 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
         PRODUCT_BUNDLE_IDENTIFIER: com.saraiba.meetingscribe
+        DEFINES_MODULE: YES
+        PRODUCT_MODULE_NAME: MeetingScribe
     entitlements:
       path: MeetingScribe/MeetingScribe.entitlements
       properties:
         com.apple.security.app-sandbox: false
         com.apple.security.device.audio-input: true
 
+  MeetingScribeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: MeetingScribeTests
+    dependencies:
+      - target: MeetingScribe
+    settings:
+      base:
+        INFOPLIST_FILE: MeetingScribeTests/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.saraiba.meetingscribe.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/MeetingScribe.app/Contents/MacOS/MeetingScribe"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
 schemes:
   MeetingScribe:
     build:
       targets:
         MeetingScribe: all
+        MeetingScribeTests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      gatherCoverage: false
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

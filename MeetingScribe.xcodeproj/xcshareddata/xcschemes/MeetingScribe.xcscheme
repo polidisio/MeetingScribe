@@ -21,6 +21,20 @@
                ReferencedContainer = "container:MeetingScribe.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "2DF533531E04693336ABF808"
+               BuildableName = "MeetingScribeTests.xctest"
+               BlueprintName = "MeetingScribeTests"
+               ReferencedContainer = "container:MeetingScribe.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -40,6 +54,8 @@
       </MacroExpansion>
       <Testables>
       </Testables>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
@@ -80,6 +96,8 @@
             ReferencedContainer = "container:MeetingScribe.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">
