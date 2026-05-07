@@ -10,22 +10,75 @@ struct ContentView: View {
     @State private var alertMessage = ""
 
     var body: some View {
-        VStack(spacing: 16) {
-            // Status indicator
+        VStack(spacing: 12) {
+            // Header
+            HStack {
+                Image(systemName: "waveform")
+                    .foregroundColor(.blue)
+                Text("MeetingScribe")
+                    .font(.headline)
+                Spacer()
+            }
+
+            Divider()
+
+            // Audio Source Picker
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Audio Source")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Picker("", selection: Binding(
+                    get: { recorder.selectedDeviceID ?? "" },
+                    set: { recorder.selectedDeviceID = $0.isEmpty ? nil : $0 }
+                )) {
+                    Text("Auto-detect").tag("")
+                    ForEach(recorder.availableDevices, id: \.uniqueID) { device in
+                        Text(device.localizedName).tag(device.uniqueID)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .disabled(recorder.isRecording)
+            }
+
+            Divider()
+
+            // Status
             HStack {
                 Circle()
                     .fill(recorder.isRecording ? Color.red : Color.gray)
-                    .frame(width: 12, height: 12)
-                Text(recorder.isRecording ? "Recording..." : "Idle")
-                    .font(.headline)
+                    .frame(width: 10, height: 10)
+                Text(recorder.isRecording ? "Recording" : "Ready")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
                 Spacer()
-                Text(recorder.transcription.count > 0 ? "\(recorder.transcription.count) chars" : "")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if recorder.transcription.count > 0 {
+                    Text("\(recorder.transcription.count) chars")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
-            .padding(.horizontal)
 
-            // Record/Stop button
+            // Transcription area
+            ScrollView {
+                if recorder.transcription.isEmpty {
+                    Text("Transcription will appear here...")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 20)
+                } else {
+                    Text(recorder.transcription)
+                        .font(.body)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .frame(maxHeight: 150)
+            .padding(8)
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(8)
+
+            // Record button
             Button(action: {
                 if recorder.isRecording {
                     recorder.stopRecording()
@@ -35,80 +88,88 @@ struct ContentView: View {
                 updateStatusIcon()
             }) {
                 HStack {
-                    Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                        .font(.system(size: 40))
-                    Text(recorder.isRecording ? "Stop" : "Start Recording")
-                        .font(.title3)
+                    Image(systemName: recorder.isRecording ? "stop.fill" : "mic.fill")
+                        .font(.title2)
+                    Text(recorder.isRecording ? "Stop Recording" : "Start Recording")
+                        .fontWeight(.medium)
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
             }
-            .buttonStyle(.plain)
-            .foregroundColor(recorder.isRecording ? .red : .blue)
+            .buttonStyle(.borderedProminent)
+            .tint(recorder.isRecording ? .red : .blue)
 
-            // Action buttons (when not recording)
+            // Action buttons (only when not recording and has transcription)
             if !recorder.isRecording && !recorder.transcription.isEmpty {
-                Divider()
-
-                Button(action: copyToClipboard) {
-                    HStack {
-                        Image(systemName: "doc.on.doc")
-                        Text("Copy Transcription")
+                HStack(spacing: 8) {
+                    Button(action: copyToClipboard) {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .frame(maxWidth: .infinity)
                     }
-                }
-                .buttonStyle(.bordered)
+                    .buttonStyle(.bordered)
 
-                Button(action: saveToFile) {
-                    HStack {
-                        Image(systemName: "folder")
-                        Text("Save to File")
+                    Button(action: saveToFile) {
+                        Label("Save", systemImage: "square.and.arrow.down")
+                            .frame(maxWidth: .infinity)
                     }
-                }
-                .buttonStyle(.bordered)
+                    .buttonStyle(.bordered)
 
-                Button(action: sendToAria) {
-                    HStack {
-                        Image(systemName: "paperplane")
-                        Text("Send to Aria")
+                    Button(action: sendToAria) {
+                        Label("Aria", systemImage: "paperplane")
+                            .frame(maxWidth: .infinity)
                     }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
+
+                Button(action: {
+                    recorder.reset()
+                }) {
+                    Text("New Recording")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
             }
 
-            Spacer()
-
-            // Error message if any
+            // Error display
             if let error = recorder.errorMessage {
                 Text(error)
                     .font(.caption)
                     .foregroundColor(.red)
-                    .padding()
+                    .padding(8)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(6)
             }
+
+            Spacer(minLength: 0)
         }
         .padding()
-        .frame(width: 300, height: 220)
+        .frame(width: 350, height: 450)
         .alert(alertMessage, isPresented: $showingAlert) {
             Button("OK", role: .cancel) { }
+        }
+        .onAppear {
+            recorder.refreshAvailableDevices()
         }
     }
 
     private func requestPermissionsAndStart() {
-        // Request microphone permission on macOS
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             DispatchQueue.main.async {
                 if granted {
-                    // Request speech recognition permission
                     SFSpeechRecognizer.requestAuthorization { status in
                         DispatchQueue.main.async {
                             if status == .authorized {
-                                recorder.startRecording()
+                                self.recorder.startRecording()
                             } else {
                                 alertMessage = "Speech recognition permission denied"
-                                showingAlert = true
+                                self.showingAlert = true
                             }
                         }
                     }
                 } else {
                     alertMessage = "Microphone permission denied"
-                    showingAlert = true
+                    self.showingAlert = true
                 }
             }
         }
@@ -127,6 +188,8 @@ struct ContentView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(recorder.transcription, forType: .string)
+        alertMessage = "Copied to clipboard!"
+        showingAlert = true
     }
 
     private func saveToFile() {
@@ -137,22 +200,22 @@ struct ContentView: View {
         savePanel.begin { response in
             if response == .OK, let url = savePanel.url {
                 do {
-                    try recorder.transcription.write(to: url, atomically: true, encoding: .utf8)
+                    try self.recorder.transcription.write(to: url, atomically: true, encoding: .utf8)
+                    self.alertMessage = "Saved to \(url.lastPathComponent)"
+                    self.showingAlert = true
                 } catch {
-                    alertMessage = "Failed to save: \(error.localizedDescription)"
-                    showingAlert = true
+                    self.alertMessage = "Failed to save: \(error.localizedDescription)"
+                    self.showingAlert = true
                 }
             }
         }
     }
 
     private func sendToAria() {
-        // Copy to clipboard for easy paste to Telegram
         copyToClipboard()
-        alertMessage = "Transcription copied! Paste it in Telegram to send to Aria."
+        alertMessage = "Copied! Paste in Telegram to send to Aria."
         showingAlert = true
 
-        // Reset for next recording
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             self.recorder.reset()
         }
