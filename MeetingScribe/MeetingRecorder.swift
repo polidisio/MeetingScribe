@@ -4,51 +4,39 @@ import Speech
 import CoreAudio
 
 class MeetingRecorder: NSObject, ObservableObject {
-    // Two independent engines — one per audio side
-    private var remoteEngine: AVAudioEngine?
-    private var localEngine: AVAudioEngine?
-
-    // Two recognizers to allow parallel tasks
-    private var remoteSpeechRecognizer: SFSpeechRecognizer?
-    private var localSpeechRecognizer: SFSpeechRecognizer?
-
-    // Two recognition streams
-    private var remoteRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var localRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var remoteTask: SFSpeechRecognitionTask?
-    private var localTask: SFSpeechRecognitionTask?
-
-    // Session rotation timers (SFSpeechRecognizer has ~60s hard limit)
-    private var remoteRotationTimer: Timer?
-    private var localRotationTimer: Timer?
-
-    // Accumulated text across rotation sessions
-    private var remoteAccumulated = ""
-    private var localAccumulated = ""
+    private var audioEngine: AVAudioEngine?
+    private var speechRecognizer: SFSpeechRecognizer?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private var rotationTimer: Timer?
+    private var accumulatedText = ""
 
     @Published var isRecording = false
-    @Published var mergedTranscription = ""
+    @Published var transcription = ""
     @Published var errorMessage: String?
     @Published var availableDevices: [AVCaptureDevice] = []
-    @Published var remoteDeviceID: String? = nil  // BlackHole / Teams audio
-    @Published var localDeviceID: String? = nil   // Microphone / your voice
+    @Published var selectedDeviceID: String? = nil
 
-    // Keep transcription as alias for ContentView compatibility
-    var transcription: String { mergedTranscription }
+    // Keep dual-picker API for UI compatibility — merged into one stream
+    var remoteDeviceID: String? {
+        get { selectedDeviceID }
+        set { selectedDeviceID = newValue }
+    }
+    var localDeviceID: String? = nil  // reserved for future use
+
+    var mergedTranscription: String { transcription }
 
     private var logFile: URL?
 
     override init() {
         super.init()
-        setupSpeechRecognizers()
+        setupSpeechRecognizer()
         setupLogFile()
         refreshAvailableDevices()
     }
 
-    private func setupSpeechRecognizers() {
-        let locale = Locale(identifier: "es-ES")
-        remoteSpeechRecognizer = SFSpeechRecognizer(locale: locale)
-        localSpeechRecognizer = SFSpeechRecognizer(locale: locale)
+    private func setupSpeechRecognizer() {
+        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "es-ES"))
     }
 
     private func setupLogFile() {
@@ -87,24 +75,20 @@ class MeetingRecorder: NSObject, ObservableObject {
     // MARK: - Start / Stop
 
     func startRecording() {
-        mergedTranscription = ""
-        remoteAccumulated = ""
-        localAccumulated = ""
+        transcription = ""
+        accumulatedText = ""
         errorMessage = nil
         log("Start recording requested")
 
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            errorMessage = "Speech recognition not authorized"
-            return
+            errorMessage = "Speech recognition not authorized"; return
         }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            errorMessage = "Microphone not authorized"
-            return
+            errorMessage = "Microphone not authorized"; return
         }
 
         do {
-            try startRemoteStream()
-            try startLocalStream()
+            try startCapture()
             DispatchQueue.main.async { self.isRecording = true }
         } catch {
             log("ERROR starting: \(error.localizedDescription)")
@@ -113,107 +97,67 @@ class MeetingRecorder: NSObject, ObservableObject {
         }
     }
 
-    private func startRemoteStream() throws {
+    private func startCapture() throws {
         let engine = AVAudioEngine()
-        remoteEngine = engine
+        audioEngine = engine
 
-        // Prefer: user selection → Aggregate containing BlackHole → BlackHole direct
-        // Reading from the Aggregate avoids clock conflicts when BlackHole is owned by it
-        let deviceID = remoteDeviceID
+        // Device priority: user selection → Aggregate containing all sources → BlackHole → default
+        // ONE engine reads from ONE device — CoreAudio does not support two simultaneous engines well
+        let deviceID = selectedDeviceID
             ?? findDeviceID(containing: "Capture")   // "MeetingScribe Capture" aggregate
             ?? findDeviceID(containing: "Meeting")   // legacy "Meeting" aggregate
-            ?? findDeviceID(containing: "BlackHole") // BlackHole direct fallback
+            ?? findDeviceID(containing: "BlackHole") // BlackHole standalone fallback
         if let id = deviceID {
             setEngineInputDevice(id, engine: engine)
         }
 
-        // Create request BEFORE installing tap
+        // Create recognition request BEFORE installing tap
         let request = makeRequest()
-        remoteRequest = request
+        recognitionRequest = request
 
         let format = engine.inputNode.outputFormat(forBus: 0)
-        log("Remote tap format: \(format), device: \(deviceID ?? "default")")
-        var remoteLevelCounter = 0
+        log("Audio tap format: \(format), device: \(deviceID ?? "default (system)")")
+
+        var bufferCount = 0
         engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buf, _ in
-            self?.remoteRequest?.append(buf)
-            remoteLevelCounter += 1
-            if remoteLevelCounter % 50 == 0, let ch = buf.floatChannelData?[0] {
+            self?.recognitionRequest?.append(buf)
+            bufferCount += 1
+            // Log audio level every ~4s to verify audio is flowing
+            if bufferCount % 25 == 0, let ch = buf.floatChannelData?[0] {
                 let rms = (0..<Int(buf.frameLength)).map { ch[$0] * ch[$0] }.reduce(0, +) / Float(buf.frameLength)
-                self?.log("Remote audio RMS: \(String(format: "%.6f", rms)) (\(buf.frameLength) frames)")
+                self?.log("Audio RMS: \(String(format: "%.6f", rms)) (\(deviceID ?? "default"))")
             }
         }
 
-        startRemoteTask()
+        startRecognitionTask()
         engine.prepare()
         try engine.start()
-        scheduleRotation(remote: true)
-        log("Remote stream started (device: \(deviceID ?? "default"))")
-    }
-
-    private func startLocalStream() throws {
-        let engine = AVAudioEngine()
-        localEngine = engine
-
-        if let id = localDeviceID {
-            setEngineInputDevice(id, engine: engine)
-        }
-
-        // Create request BEFORE installing tap
-        let request = makeRequest()
-        localRequest = request
-
-        let format = engine.inputNode.outputFormat(forBus: 0)
-        log("Local tap format: \(format)")
-        var localLevelCounter = 0
-        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buf, _ in
-            self?.localRequest?.append(buf)
-            localLevelCounter += 1
-            if localLevelCounter % 50 == 0, let ch = buf.floatChannelData?[0] {
-                let rms = (0..<Int(buf.frameLength)).map { ch[$0] * ch[$0] }.reduce(0, +) / Float(buf.frameLength)
-                self?.log("Local audio RMS: \(String(format: "%.6f", rms)) (\(buf.frameLength) frames)")
-            }
-        }
-
-        startLocalTask()
-        engine.prepare()
-        try engine.start()
-        scheduleRotation(remote: false)
-        log("Local stream started (device: \(localDeviceID ?? "default"))")
+        scheduleRotation()
+        log("Capture started on device: \(deviceID ?? "default")")
     }
 
     func stopRecording() {
         log("Stop recording called")
-
-        remoteRotationTimer?.invalidate(); remoteRotationTimer = nil
-        localRotationTimer?.invalidate(); localRotationTimer = nil
-
-        remoteEngine?.inputNode.removeTap(onBus: 0)
-        remoteEngine?.stop()
-        localEngine?.inputNode.removeTap(onBus: 0)
-        localEngine?.stop()
-
-        remoteRequest?.endAudio()
-        localRequest?.endAudio()
-        remoteTask?.cancel()
-        localTask?.cancel()
-
-        remoteRequest = nil; localRequest = nil
-        remoteTask = nil; localTask = nil
-        remoteEngine = nil; localEngine = nil
-
-        log("Recording stopped")
+        rotationTimer?.invalidate(); rotationTimer = nil
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine?.stop()
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+        recognitionRequest = nil
+        recognitionTask = nil
+        audioEngine = nil
+        log("Recording stopped, transcription length: \(transcription.count)")
         DispatchQueue.main.async { self.isRecording = false }
     }
 
     func reset() {
-        mergedTranscription = ""
-        remoteAccumulated = ""
-        localAccumulated = ""
+        transcription = ""
+        accumulatedText = ""
         errorMessage = nil
         log("Reset called")
     }
 
-    // MARK: - Recognition tasks
+    // MARK: - Recognition
 
     private func makeRequest() -> SFSpeechAudioBufferRecognitionRequest {
         let req = SFSpeechAudioBufferRecognitionRequest()
@@ -222,89 +166,43 @@ class MeetingRecorder: NSObject, ObservableObject {
         return req
     }
 
-    private func startRemoteTask() {
-        guard let recognizer = remoteSpeechRecognizer, let request = remoteRequest else { return }
-        remoteTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+    private func startRecognitionTask() {
+        guard let recognizer = speechRecognizer, let request = recognitionRequest else { return }
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self = self else { return }
             if let result = result {
+                let partial = result.bestTranscription.formattedString
                 if result.isFinal {
-                    self.remoteAccumulated += result.bestTranscription.formattedString + " "
-                    self.log("Remote (final): \(result.bestTranscription.formattedString)")
-                    self.rebuildTranscription(remotePartial: "")
+                    self.accumulatedText += partial + " "
+                    self.log("Final segment: \(partial)")
+                    DispatchQueue.main.async { self.transcription = self.accumulatedText.trimmingCharacters(in: .whitespaces) }
                 } else {
-                    self.rebuildTranscription(remotePartial: result.bestTranscription.formattedString)
+                    DispatchQueue.main.async { self.transcription = (self.accumulatedText + partial).trimmingCharacters(in: .whitespaces) }
                 }
             }
             if let error = error as NSError?, error.code != 301 {
-                self.log("Remote recognition error: \(error.localizedDescription) (\(error.code))")
+                self.log("Recognition error: \(error.localizedDescription) (\(error.code))")
             }
-        }
-    }
-
-    private func startLocalTask() {
-        guard let recognizer = localSpeechRecognizer, let request = localRequest else { return }
-        localTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self = self else { return }
-            if let result = result {
-                if result.isFinal {
-                    self.localAccumulated += result.bestTranscription.formattedString + " "
-                    self.log("Local (final): \(result.bestTranscription.formattedString)")
-                    self.rebuildTranscription(localPartial: "")
-                } else {
-                    self.rebuildTranscription(localPartial: result.bestTranscription.formattedString)
-                }
-            }
-            if let error = error as NSError?, error.code != 301 {
-                self.log("Local recognition error: \(error.localizedDescription) (\(error.code))")
-            }
-        }
-    }
-
-    private var lastRemotePartial = ""
-    private var lastLocalPartial = ""
-
-    private func rebuildTranscription(remotePartial: String? = nil, localPartial: String? = nil) {
-        if let r = remotePartial { lastRemotePartial = r }
-        if let l = localPartial { lastLocalPartial = l }
-
-        let remoteText = (remoteAccumulated + lastRemotePartial).trimmingCharacters(in: .whitespaces)
-        let localText = (localAccumulated + lastLocalPartial).trimmingCharacters(in: .whitespaces)
-
-        var parts: [String] = []
-        if !remoteText.isEmpty { parts.append("Remoto: \(remoteText)") }
-        if !localText.isEmpty { parts.append("Tú: \(localText)") }
-
-        DispatchQueue.main.async {
-            self.mergedTranscription = parts.joined(separator: "\n\n")
         }
     }
 
     // MARK: - Session rotation (before the ~60s SFSpeechRecognizer hard limit)
 
-    private func scheduleRotation(remote: Bool) {
-        let timer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in
-            self?.rotateSession(remote: remote)
+    private func scheduleRotation() {
+        rotationTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in
+            self?.rotateSession()
         }
-        if remote { remoteRotationTimer = timer } else { localRotationTimer = timer }
     }
 
-    private func rotateSession(remote: Bool) {
-        log("Rotating \(remote ? "remote" : "local") recognition session")
+    private func rotateSession() {
+        log("Rotating recognition session")
         let newRequest = makeRequest()
-
-        if remote {
-            let old = (remoteRequest, remoteTask)
-            remoteRequest = newRequest
-            startRemoteTask()
-            old.0?.endAudio()
-            old.1?.cancel()
-        } else {
-            let old = (localRequest, localTask)
-            localRequest = newRequest
-            startLocalTask()
-            old.0?.endAudio()
-            old.1?.cancel()
-        }
+        let oldRequest = recognitionRequest
+        let oldTask = recognitionTask
+        recognitionRequest = newRequest
+        startRecognitionTask()
+        oldRequest?.endAudio()
+        oldTask?.cancel()
     }
 
     // MARK: - CoreAudio device selection
@@ -336,7 +234,7 @@ class MeetingRecorder: NSObject, ObservableObject {
         let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &translation)
 
         guard status == noErr, deviceID != kAudioObjectUnknown else {
-            log("Could not resolve device UID \(uniqueID)")
+            log("Could not resolve UID \(uniqueID), using default")
             return
         }
 
@@ -344,10 +242,8 @@ class MeetingRecorder: NSObject, ObservableObject {
         let result = AudioUnitSetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice,
                                           kAudioUnitScope_Global, 0,
                                           &devID, UInt32(MemoryLayout<AudioDeviceID>.size))
-        if result == noErr {
-            log("Engine input set to AudioDeviceID \(deviceID)")
-        } else {
-            log("Failed to set device, status: \(result)")
-        }
+        log(result == noErr
+            ? "Engine input set to AudioDeviceID \(deviceID)"
+            : "Failed to set device, status: \(result)")
     }
 }
