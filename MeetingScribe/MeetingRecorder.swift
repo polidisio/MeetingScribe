@@ -117,8 +117,12 @@ class MeetingRecorder: NSObject, ObservableObject {
         let engine = AVAudioEngine()
         remoteEngine = engine
 
-        // Prefer selected device, then BlackHole auto-detect
-        let deviceID = remoteDeviceID ?? findDeviceID(containing: "BlackHole")
+        // Prefer: user selection → Aggregate containing BlackHole → BlackHole direct
+        // Reading from the Aggregate avoids clock conflicts when BlackHole is owned by it
+        let deviceID = remoteDeviceID
+            ?? findDeviceID(containing: "Capture")   // "MeetingScribe Capture" aggregate
+            ?? findDeviceID(containing: "Meeting")   // legacy "Meeting" aggregate
+            ?? findDeviceID(containing: "BlackHole") // BlackHole direct fallback
         if let id = deviceID {
             setEngineInputDevice(id, engine: engine)
         }
@@ -128,9 +132,15 @@ class MeetingRecorder: NSObject, ObservableObject {
         remoteRequest = request
 
         let format = engine.inputNode.outputFormat(forBus: 0)
-        log("Remote tap format: \(format)")
+        log("Remote tap format: \(format), device: \(deviceID ?? "default")")
+        var remoteLevelCounter = 0
         engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buf, _ in
             self?.remoteRequest?.append(buf)
+            remoteLevelCounter += 1
+            if remoteLevelCounter % 50 == 0, let ch = buf.floatChannelData?[0] {
+                let rms = (0..<Int(buf.frameLength)).map { ch[$0] * ch[$0] }.reduce(0, +) / Float(buf.frameLength)
+                self?.log("Remote audio RMS: \(String(format: "%.6f", rms)) (\(buf.frameLength) frames)")
+            }
         }
 
         startRemoteTask()
@@ -154,8 +164,14 @@ class MeetingRecorder: NSObject, ObservableObject {
 
         let format = engine.inputNode.outputFormat(forBus: 0)
         log("Local tap format: \(format)")
+        var localLevelCounter = 0
         engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buf, _ in
             self?.localRequest?.append(buf)
+            localLevelCounter += 1
+            if localLevelCounter % 50 == 0, let ch = buf.floatChannelData?[0] {
+                let rms = (0..<Int(buf.frameLength)).map { ch[$0] * ch[$0] }.reduce(0, +) / Float(buf.frameLength)
+                self?.log("Local audio RMS: \(String(format: "%.6f", rms)) (\(buf.frameLength) frames)")
+            }
         }
 
         startLocalTask()
