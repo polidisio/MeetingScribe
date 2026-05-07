@@ -22,24 +22,47 @@ struct ContentView: View {
 
             Divider()
 
-            // Audio Source Picker
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Audio Source")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                Picker("", selection: Binding(
-                    get: { recorder.selectedDeviceID ?? "" },
-                    set: { recorder.selectedDeviceID = $0.isEmpty ? nil : $0 }
-                )) {
-                    Text("Auto-detect").tag("")
-                    ForEach(recorder.availableDevices, id: \.uniqueID) { device in
-                        Text(device.localizedName).tag(device.uniqueID)
+            // Device pickers
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Audio remoto")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { recorder.remoteDeviceID ?? "" },
+                        set: { recorder.remoteDeviceID = $0.isEmpty ? nil : $0 }
+                    )) {
+                        Text("Auto (BlackHole)").tag("")
+                        ForEach(recorder.availableDevices, id: \.uniqueID) { d in
+                            Text(d.localizedName).tag(d.uniqueID)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .disabled(recorder.isRecording)
+                    .frame(maxWidth: 160)
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .disabled(recorder.isRecording)
+
+                HStack {
+                    Text("Micrófono")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { recorder.localDeviceID ?? "" },
+                        set: { recorder.localDeviceID = $0.isEmpty ? nil : $0 }
+                    )) {
+                        Text("Auto (sistema)").tag("")
+                        ForEach(recorder.availableDevices, id: \.uniqueID) { d in
+                            Text(d.localizedName).tag(d.uniqueID)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .disabled(recorder.isRecording)
+                    .frame(maxWidth: 160)
+                }
             }
 
             Divider()
@@ -144,7 +167,7 @@ struct ContentView: View {
             Spacer(minLength: 0)
         }
         .padding()
-        .frame(width: 350, height: 450)
+        .frame(width: 350, height: 480)
         .alert(alertMessage, isPresented: $showingAlert) {
             Button("OK", role: .cancel) { }
         }
