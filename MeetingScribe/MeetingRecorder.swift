@@ -109,17 +109,14 @@ class MeetingRecorder: NSObject, ObservableObject {
         }
 
         let inputNode = audioEngine.inputNode
-        let recordingFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16000,
-            channels: 1,
-            interleaved: false
-        )!
 
-        log("Setting up audio tap with format: \(recordingFormat)")
+        // Use native hardware format - SFSpeechRecognizer accepts any format
+        let nativeFormat = inputNode.outputFormat(forBus: 0)
 
-        // Install tap - AVAudioEngine automatically converts to requested format
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: recordingFormat) { [weak self] buffer, _ in
+        log("Setting up audio tap with native format: \(nativeFormat)")
+
+        // Install tap with native format - avoids silent failure with format mismatches
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
 
@@ -130,7 +127,7 @@ class MeetingRecorder: NSObject, ObservableObject {
         }
 
         recognitionRequest.shouldReportPartialResults = true
-        recognitionRequest.requiresOnDeviceRecognition = true
+        recognitionRequest.requiresOnDeviceRecognition = false
 
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
             throw NSError(domain: "MeetingRecorder", code: 5, userInfo: [NSLocalizedDescriptionKey: "Speech recognizer not available"])
