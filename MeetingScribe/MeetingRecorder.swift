@@ -1,10 +1,10 @@
 import Foundation
 import AVFoundation
 import Speech
+import CoreAudio
 
 class MeetingRecorder: NSObject, ObservableObject {
-    private var captureSession: AVCaptureSession?
-    private var audioOutput: AVCaptureAudioDataOutput?
+    private var audioEngine: AVAudioEngine?
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -36,7 +36,7 @@ class MeetingRecorder: NSObject, ObservableObject {
 
     func refreshAvailableDevices() {
         let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInMicrophone, .external],
+            deviceTypes: [.microphone, .external],
             mediaType: .audio,
             position: .unspecified
         )
@@ -92,70 +92,36 @@ class MeetingRecorder: NSObject, ObservableObject {
     }
 
     private func startAudioCapture() throws {
-        log("Creating AVCaptureSession...")
+        log("Creating AVAudioEngine...")
 
-        captureSession = AVCaptureSession()
-
-        guard let captureSession = captureSession else {
-            throw NSError(domain: "MeetingRecorder", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not create capture session"])
+        audioEngine = AVAudioEngine()
+        guard let audioEngine = audioEngine else {
+            throw NSError(domain: "MeetingRecorder", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not create audio engine"])
         }
 
-        let device: AVCaptureDevice
-        if let id = selectedDeviceID, let found = AVCaptureDevice(uniqueID: id) {
-            device = found
-            log("Using selected device: \(found.localizedName) (\(id))")
-        } else {
-            let discoverySession = AVCaptureDevice.DiscoverySession(
-                deviceTypes: [.builtInMicrophone, .external],
-                mediaType: .audio,
-                position: .unspecified
-            )
-            let preferred = discoverySession.devices.first(where: { $0.localizedName.contains("BlackHole") })
-                ?? discoverySession.devices.first(where: { $0.localizedName == "Meeting" })
-                ?? AVCaptureDevice.default(for: .audio)
-            guard let resolved = preferred else {
-                throw NSError(domain: "MeetingRecorder", code: 1, userInfo: [NSLocalizedDescriptionKey: "No audio device found"])
-            }
-            device = resolved
-            log("Auto-selected device: \(device.localizedName)")
-            DispatchQueue.main.async { self.selectedDeviceID = device.uniqueID }
-        }
-
-        let audioDevice = device
-
-        // Add audio input
-        let inputError: NSError?
-        do {
-            try captureSession.addInput(AVCaptureDeviceInput(device: audioDevice))
-        } catch let error as NSError {
-            if error.code == -5803 {
-                // Device already has input, try to remove and re-add
-                captureSession.inputs.forEach { input in
-                    captureSession.removeInput(input)
-                }
-                try captureSession.addInput(AVCaptureDeviceInput(device: audioDevice))
-            } else {
-                throw error
+        // Select input device if specified
+        if let id = selectedDeviceID {
+            do {
+                try setEngineInputDevice(id)
+            } catch {
+                log("Warning: Could not set selected device, using default: \(error.localizedDescription)")
             }
         }
 
-        // Create audio output
-        audioOutput = AVCaptureAudioDataOutput()
-        guard let audioOutput = audioOutput else {
-            throw NSError(domain: "MeetingRecorder", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not create audio output"])
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16000,
+            channels: 1,
+            interleaved: false
+        )!
+
+        log("Setting up audio tap with format: \(recordingFormat)")
+
+        // Install tap - AVAudioEngine automatically converts to requested format
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: recordingFormat) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
         }
-
-        // Set delegate to receive audio buffers
-        audioOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "audioQueue"))
-
-        if captureSession.canAddOutput(audioOutput) {
-            captureSession.addOutput(audioOutput)
-        } else {
-            throw NSError(domain: "MeetingRecorder", code: 3, userInfo: [NSLocalizedDescriptionKey: "Cannot add audio output"])
-        }
-
-        // Configure audio format for speech recognition (mono 16kHz)
-        let speechFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
 
         // Create recognition request
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
@@ -188,101 +154,81 @@ class MeetingRecorder: NSObject, ObservableObject {
             }
         }
 
-        log("Starting capture session...")
-        captureSession.startRunning()
+        log("Starting audio engine...")
+        audioEngine.prepare()
+        try audioEngine.start()
 
         DispatchQueue.main.async {
             self.isRecording = true
-            self.log("Recording started successfully")
+            self.log("Recording started successfully with AVAudioEngine")
         }
     }
 
-    private func processAudioBuffer(_ sampleBuffer: CMSampleBuffer) {
-        // Convert to PCM buffer for speech recognition
-        guard let pcmBuffer = createPCMBuffer(from: sampleBuffer) else {
+    private func setEngineInputDevice(_ uniqueID: String) throws {
+        guard let audioEngine = audioEngine, let audioUnit = audioEngine.inputNode.audioUnit else {
+            log("Audio engine or input node not available")
             return
         }
 
-        recognitionRequest?.append(pcmBuffer)
-    }
+        // Resolve device UID to AudioDeviceID using CoreAudio
+        var deviceID = kAudioObjectUnknown
+        let uidPointer: UnsafeMutablePointer<CFString?> = UnsafeMutablePointer<CFString?>.allocate(capacity: 1)
+        uidPointer.pointee = uniqueID as CFString
+        defer { uidPointer.deallocate() }
 
-    private func createPCMBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
-        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) as CMAudioFormatDescription?,
-              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
-            return nil
+        var translation = AudioValueTranslation(
+            mInputData: UnsafeMutableRawPointer(uidPointer),
+            mInputDataSize: UInt32(MemoryLayout<CFString>.size),
+            mOutputData: &deviceID,
+            mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDeviceForUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size = UInt32(MemoryLayout<AudioValueTranslation>.size)
+
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &translation
+        )
+
+        guard status == noErr, deviceID != kAudioObjectUnknown else {
+            log("Could not resolve device UID \(uniqueID), using default")
+            return
         }
 
-        let sampleRate = asbd.pointee.mSampleRate
-        let channelCount = asbd.pointee.mChannelsPerFrame
-        let frames = CMSampleBufferGetNumSamples(sampleBuffer)
+        // Set the device on the audio unit
+        var deviceIDValue = deviceID
+        let result = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceIDValue,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
 
-        // Target format: mono 16kHz
-        let targetSampleRate: Double = 16000
-
-        guard let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSampleRate, channels: 1, interleaved: false) else {
-            return nil
-        }
-
-        // Calculate output frame count
-        let ratio = targetSampleRate / sampleRate
-        let outputFrames = Int(Double(frames) * ratio)
-
-        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: AVAudioFrameCount(outputFrames)) else {
-            return nil
-        }
-
-        // Get audio data from sample buffer
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
-            return nil
-        }
-
-        var length = 0
-        var dataPointer: UnsafeMutablePointer<Int8>?
-        CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &dataPointer)
-
-        guard let data = dataPointer else {
-            return nil
-        }
-
-        // Copy data (simple approach - for multi-channel, would need mixing)
-        let floatCount = length / MemoryLayout<Float>.size
-        let floatPointer = UnsafeMutablePointer<Float>.allocate(capacity: floatCount)
-        memcpy(floatPointer, data, length)
-
-        // If mono, copy directly. If multi-channel, mix to mono
-        if channelCount == 1 {
-            for i in 0..<min(frames, outputFrames) {
-                outputBuffer.floatChannelData?[0][i] = floatPointer[i]
-            }
+        if result == noErr {
+            log("Set input device to AudioDeviceID \(deviceID) (UID: \(uniqueID))")
         } else {
-            // Mix channels
-            for i in 0..<min(frames, outputFrames) {
-                var sum: Float = 0
-                for ch in 0..<Int(channelCount) {
-                    sum += floatPointer[i * Int(channelCount) + ch]
-                }
-                outputBuffer.floatChannelData?[0][i] = sum / Float(channelCount)
-            }
+            log("Warning: Failed to set input device, status: \(result)")
         }
-
-        floatPointer.deallocate()
-        outputBuffer.frameLength = AVAudioFrameCount(outputFrames)
-
-        return outputBuffer
     }
 
     func stopRecording() {
         log("Stop recording called")
 
-        captureSession?.stopRunning()
-        captureSession = nil
+        if let audioEngine = audioEngine {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            audioEngine.stop()
+        }
 
         recognitionRequest?.endAudio()
-
         recognitionTask?.cancel()
         recognitionTask = nil
         recognitionRequest = nil
-        audioOutput = nil
+        audioEngine = nil
 
         log("Recording stopped, final transcription: \(transcription)")
 
@@ -295,12 +241,5 @@ class MeetingRecorder: NSObject, ObservableObject {
         transcription = ""
         errorMessage = nil
         log("Reset called")
-    }
-}
-
-// MARK: - AVCaptureAudioDataOutputSampleBufferDelegate
-extension MeetingRecorder: AVCaptureAudioDataOutputSampleBufferDelegate {
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        processAudioBuffer(sampleBuffer)
     }
 }
