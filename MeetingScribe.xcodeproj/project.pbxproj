@@ -11,6 +11,7 @@
 		299EB8E1E9E25FA8BEA716A5 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A34C52042BF573050C3017B /* main.swift */; };
 		2CAE75819FF17CBDD82CC395 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846D6737E8314A0E03A53369 /* ContentView.swift */; };
 		58ED7DDF2BEDF5761517B096 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 238E35F10B674F51345F27DF /* AppDelegate.swift */; };
+		7B06A786081C1B60D1509BBD /* ScreenCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FC975161CA98DD9F974EF2 /* ScreenCaptureManager.swift */; };
 		91FE7D8F9C9726790627A7D0 /* MeetingScribeIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64BD9E25B69F1B1589465B0C /* MeetingScribeIntegrationTests.swift */; };
 		DE88630F316A20804A222CC5 /* MeetingScribeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 692D896651A2F2BDC9B71236 /* MeetingScribeTests.swift */; };
 		EFFD0AF44A202EDB3E3D2AAF /* MeetingRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81FDFAE50C2C11A35EF483C2 /* MeetingRecorder.swift */; };
@@ -33,6 +34,7 @@
 		5D6756ACDAAB81DFACDFEFCC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		64BD9E25B69F1B1589465B0C /* MeetingScribeIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingScribeIntegrationTests.swift; sourceTree = "<group>"; };
 		692D896651A2F2BDC9B71236 /* MeetingScribeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingScribeTests.swift; sourceTree = "<group>"; };
+		69FC975161CA98DD9F974EF2 /* ScreenCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCaptureManager.swift; sourceTree = "<group>"; };
 		793DEB3087CFD524F5987432 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7AA890ABC12476BBC8C98DBF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		81FDFAE50C2C11A35EF483C2 /* MeetingRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecorder.swift; sourceTree = "<group>"; };
@@ -61,6 +63,7 @@
 				4A34C52042BF573050C3017B /* main.swift */,
 				81FDFAE50C2C11A35EF483C2 /* MeetingRecorder.swift */,
 				0B4CFF1487FE2336BFC38379 /* MeetingScribe.entitlements */,
+				69FC975161CA98DD9F974EF2 /* ScreenCaptureManager.swift */,
 			);
 			path = MeetingScribe;
 			sourceTree = "<group>";
@@ -179,6 +182,7 @@
 				58ED7DDF2BEDF5761517B096 /* AppDelegate.swift in Sources */,
 				2CAE75819FF17CBDD82CC395 /* ContentView.swift in Sources */,
 				EFFD0AF44A202EDB3E3D2AAF /* MeetingRecorder.swift in Sources */,
+				7B06A786081C1B60D1509BBD /* ScreenCaptureManager.swift in Sources */,
 				299EB8E1E9E25FA8BEA716A5 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
