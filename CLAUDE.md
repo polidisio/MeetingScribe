@@ -1,3 +1,5 @@
+> **Archivado (17/11/2026).** Este proyecto se ha fusionado en **MeetingsScribe** (`~/Projects/MeetingsScribe`, Electron + Whisper), que incorpora su dictado de macOS sin descarga, el popover de la barra de menú, el botón Compartir y su interfaz. No se desarrolla más aquí.
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.

@@ -1,3 +1,5 @@
+> **Archivado (17/11/2026).** Este proyecto se ha fusionado en **MeetingsScribe** (`~/Projects/MeetingsScribe`, Electron + Whisper), que incorpora su dictado de macOS sin descarga, el popover de la barra de menú, el botón Compartir y su interfaz. No se desarrolla más aquí.
+
 # MeetingScribe 🎤
 
 **macOS menu bar app for recording and transcribing meetings using on-device speech recognition.**
