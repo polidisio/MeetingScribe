@@ -16,6 +16,10 @@ settings:
     ENABLE_HARDENED_RUNTIME: YES
     COMBINE_HIDPI_IMAGES: YES
   configs:
+    Release:
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: "Developer ID Application"
+      DEVELOPMENT_TEAM: DQ7D6387N8
     Debug:
       ENABLE_TESTABILITY: YES
       SWIFT_OPTIMIZATION_LEVEL: "-Onone"

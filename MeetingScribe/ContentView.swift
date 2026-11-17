@@ -235,9 +235,9 @@ struct ContentView: View {
 private struct TranscriptView: View {
     @ObservedObject var recorder: MeetingRecorder
 
-    private var partialIDs: Set<UUID> { Set(recorder.partials.values.map(\.id)) }
+    private var partialIDs: Set<UUID> { Set([recorder.partial?.id].compactMap { $0 }) }
     private var rows: [TranscriptEntry] {
-        recorder.entries + recorder.partials.values.sorted { $0.date < $1.date }
+        recorder.entries + [recorder.partial].compactMap { $0 }
     }
 
     var body: some View {

@@ -135,12 +135,6 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
-					2DF533531E04693336ABF808 = {
-						ProvisioningStyle = Automatic;
-					};
-					B53F21351D546CF08BE4C8EE = {
-						ProvisioningStyle = Automatic;
-					};
 				};
 			};
 			buildConfigurationList = C93EEFF8F2C0056CBCC42B1F /* Build configuration list for PBXProject "MeetingScribe" */;
@@ -241,9 +235,11 @@
 		4A2564BE5509861E7268A4FE /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DQ7D6387N8;
 				ENABLE_HARDENED_RUNTIME = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0.0;

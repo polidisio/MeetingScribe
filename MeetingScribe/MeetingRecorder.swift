@@ -25,7 +25,7 @@ final class MeetingRecorder: NSObject, ObservableObject {
 
     @Published private(set) var isRecording = false
     @Published private(set) var entries: [TranscriptEntry] = []
-    @Published private(set) var partials: [TranscriptEntry.Source: TranscriptEntry] = [:]
+    @Published private(set) var partial: TranscriptEntry?
     @Published private(set) var audioLevel: Float = 0
     @Published private(set) var startDate: Date?
     @Published private(set) var endDate: Date?
@@ -43,7 +43,9 @@ final class MeetingRecorder: NSObject, ObservableObject {
 
     let screenCapture = ScreenCaptureManager()
 
-    private var streams: [RecognitionStream] = []
+    // ONE recognition task per process: on-device SFSpeechRecognizer kills the older task when a second starts (1110).
+    private var stream: RecognitionStream?
+    private var mixer: SourceMixer?
     private var audioEngine: AVAudioEngine?
     private var micSession: AVCaptureSession?
     private var micDelegate: SampleBufferForwarder?
@@ -64,7 +66,7 @@ final class MeetingRecorder: NSObject, ObservableObject {
 
     override init() {
         let defaults = UserDefaults.standard
-        captureMode = CaptureMode(rawValue: defaults.string(forKey: "captureMode") ?? "") ?? .microphone
+        captureMode = CaptureMode(rawValue: defaults.string(forKey: "captureMode") ?? "") ?? .app
         language = defaults.string(forKey: "language") ?? "es-ES"
         super.init()
         refreshAvailableDevices()
@@ -117,7 +119,8 @@ final class MeetingRecorder: NSObject, ObservableObject {
         } catch {
             logger.error("Start failed: \(error.localizedDescription, privacy: .public)")
             await tearDownAudio()
-            streams = []
+            stream = nil
+            mixer = nil
             startDate = nil
             if errorMessage == nil { fail(error.localizedDescription) }
         }
@@ -127,11 +130,12 @@ final class MeetingRecorder: NSObject, ObservableObject {
         guard isRecording else { return }
         ticker?.invalidate(); ticker = nil
         await tearDownAudio()
-        streams.forEach { $0.stop() }
-        streams = []
+        stream?.stop()
+        stream = nil
+        mixer = nil
         // Whatever was still in flight becomes a regular entry — nothing is dropped on stop.
-        partials.values.sorted { $0.date < $1.date }.forEach(insert)
-        partials = [:]
+        partial.map(insert)
+        partial = nil
         audioLevel = 0
         endDate = Date()
         isRecording = false
@@ -144,7 +148,7 @@ final class MeetingRecorder: NSObject, ObservableObject {
 
     func reset() {
         entries = []
-        partials = [:]
+        partial = nil
         startDate = nil
         endDate = nil
         lastSavedURL = nil
@@ -166,22 +170,23 @@ final class MeetingRecorder: NSObject, ObservableObject {
 
     // MARK: - Streams
 
-    private func makeStream(_ source: TranscriptEntry.Source) throws -> RecognitionStream {
+    private func makeStream(source: @escaping () -> TranscriptEntry.Source,
+                            onOpen: @escaping () -> Void = {}) throws -> RecognitionStream {
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: language)) else {
             throw RecorderError("No se pudo crear el reconocedor de voz.")
         }
-        let stream = RecognitionStream(source: source, recognizer: recognizer)
+        let stream = RecognitionStream(recognizer: recognizer, source: source, onOpen: onOpen)
         stream.onPartial = { [weak self] entry in
-            MainActor.assumeIsolated { self?.partials[source] = entry }
+            MainActor.assumeIsolated { self?.partial = entry }
         }
         stream.onFinal = { [weak self] entry in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                if self.partials[source]?.id == entry.id { self.partials[source] = nil }
+                if self.partial?.id == entry.id { self.partial = nil }
                 self.insert(entry)
             }
         }
-        streams.append(stream)
+        self.stream = stream
         stream.start()
         return stream
     }
@@ -193,7 +198,7 @@ final class MeetingRecorder: NSObject, ObservableObject {
     }
 
     private func tick() {
-        streams.forEach { $0.segmentIfPaused() }
+        stream?.segmentIfPaused()
     }
 
     private nonisolated func reportLevel(_ buffer: AVAudioPCMBuffer) {
@@ -226,7 +231,7 @@ final class MeetingRecorder: NSObject, ObservableObject {
     // MARK: - Microphone mode (one AVAudioEngine, one device)
 
     private func startMicrophoneMode() throws {
-        let stream = try makeStream(.room)
+        let stream = try makeStream(source: { .room })
         let engine = AVAudioEngine()
         audioEngine = engine
 
@@ -270,24 +275,28 @@ final class MeetingRecorder: NSObject, ObservableObject {
         let app = screenCapture.selectedApp  // nil = all system audio
         sessionSource = "\(app?.applicationName ?? "Audio del sistema") + micrófono"
 
-        let remote = try makeStream(.remote)
+        // Meeting audio is the clock; the mic is mixed into it so a single recognition task hears both.
+        let mixer = SourceMixer()
+        self.mixer = mixer
+        let stream = try makeStream(source: { mixer.dominantSource() }, onOpen: { mixer.resetEnergy() })
         var buffers = 0
         screenCapture.onAudioBuffer = { [weak self] buffer in
             buffers += 1
             if buffers == 1 || buffers % 500 == 0 {
                 logger.info("App audio buffers: \(buffers), level \(Self.level(of: buffer))")
             }
-            remote.append(buffer)
-            self?.reportLevel(buffer)
+            guard let mixed = mixer.mix(remote: buffer) else { return }
+            stream.append(mixed)
+            self?.reportLevel(mixed)
         }
         try await screenCapture.startCapture(app: app)
 
-        let me = try makeStream(.me)
-        try startMicSession(into: me)
+        do { try startMicSession(into: mixer) }
+        catch { logger.error("Mic unavailable, meeting audio only: \(error.localizedDescription, privacy: .public)") }
     }
 
     // AVCaptureSession (not a second AVAudioEngine): two engines conflict in CoreAudio.
-    private func startMicSession(into stream: RecognitionStream) throws {
+    private func startMicSession(into mixer: SourceMixer) throws {
         let device = selectedDeviceID.flatMap { AVCaptureDevice(uniqueID: $0) } ?? AVCaptureDevice.default(for: .audio)
         guard let device else { throw RecorderError("No se encontró ningún micrófono.") }
         logger.info("Mic: \(device.localizedName, privacy: .public)")
@@ -296,10 +305,7 @@ final class MeetingRecorder: NSObject, ObservableObject {
         let input = try AVCaptureDeviceInput(device: device)
         if session.canAddInput(input) { session.addInput(input) }
         let output = AVCaptureAudioDataOutput()
-        let forwarder = SampleBufferForwarder { [weak self] buffer in
-            stream.append(buffer)
-            self?.reportLevel(buffer)
-        }
+        let forwarder = SampleBufferForwarder { mixer.pushMic($0) }
         output.setSampleBufferDelegate(forwarder, queue: DispatchQueue(label: "com.meetingscribe.mic"))
         if session.canAddOutput(output) { session.addOutput(output) }
         micDelegate = forwarder
@@ -359,7 +365,6 @@ struct RecorderError: LocalizedError {
 /// or when the recognizer gives up. The previous request is ended (not cancelled) so its final text still arrives.
 /// Recognition callbacks arrive on the main queue (SFSpeechRecognizer.queue default); `append` is called from audio threads.
 private final class RecognitionStream {
-    let source: TranscriptEntry.Source
     var onPartial: (TranscriptEntry) -> Void = { _ in }
     var onFinal: (TranscriptEntry) -> Void = { _ in }
 
@@ -372,14 +377,20 @@ private final class RecognitionStream {
     private var currentText = ""
     private var openedAt = Date()
     private var lastChange = Date()
+    private var appended = 0      // buffers in current request (guarded by lock)
+    private var loggedFormat = false
 
     // ponytail: pause/length thresholds are guesses; tune if entries split mid-sentence or run too long
     private let pauseToSegment: TimeInterval = 1.6
     private let maxUtterance: TimeInterval = 50
 
-    init(source: TranscriptEntry.Source, recognizer: SFSpeechRecognizer) {
-        self.source = source
+    private let source: () -> TranscriptEntry.Source   // resolved per result (app mode: who was louder)
+    private let onOpen: () -> Void
+
+    init(recognizer: SFSpeechRecognizer, source: @escaping () -> TranscriptEntry.Source, onOpen: @escaping () -> Void) {
         self.recognizer = recognizer
+        self.source = source
+        self.onOpen = onOpen
     }
 
     func start() {
@@ -388,7 +399,13 @@ private final class RecognitionStream {
     }
 
     func append(_ buffer: AVAudioPCMBuffer) {
-        lock.lock(); let r = request; lock.unlock()
+        lock.lock()
+        let r = request
+        appended += 1
+        let logFormat = !loggedFormat
+        loggedFormat = true
+        lock.unlock()
+        if logFormat { logger.info("[\("stream", privacy: .public)] first buffer: \(buffer.format.description, privacy: .public), \(buffer.frameLength) frames") }
         r?.append(buffer)
     }
 
@@ -415,8 +432,9 @@ private final class RecognitionStream {
         req.shouldReportPartialResults = true
         req.requiresOnDeviceRecognition = true
         req.addsPunctuation = true
-        lock.lock(); let old = request; request = req; lock.unlock()
+        lock.lock(); let old = request; request = req; let oldCount = appended; appended = 0; lock.unlock()
         old?.endAudio()  // let the old task deliver its final result
+        logger.debug("[\("stream", privacy: .public)] open request gen \(self.generation + 1), previous had \(oldCount) buffers")
 
         generation += 1
         let gen = generation
@@ -424,6 +442,7 @@ private final class RecognitionStream {
         var startedAt: Date?
         var lastText = ""
         currentText = ""
+        onOpen()
         openedAt = Date()
         lastChange = Date()
 
@@ -434,8 +453,9 @@ private final class RecognitionStream {
                 let text = result.bestTranscription.formattedString
                 if startedAt == nil, !text.isEmpty { startedAt = Date() }
                 lastText = text
-                let entry = TranscriptEntry(id: entryID, source: self.source, date: startedAt ?? Date(), text: text)
+                let entry = TranscriptEntry(id: entryID, source: self.source(), date: startedAt ?? Date(), text: text)
                 if result.isFinal {
+                    logger.debug("[\("stream", privacy: .public)] final gen \(gen): \(text.count) chars")
                     self.onFinal(entry)
                     if isCurrent && self.running { self.openRequest() }
                 } else if isCurrent {
@@ -445,10 +465,10 @@ private final class RecognitionStream {
             } else if let error = error as NSError? {
                 // Task ended without a final (e.g. 1110 "no speech detected"): keep any partial, reopen.
                 if !lastText.isEmpty {
-                    self.onFinal(TranscriptEntry(id: entryID, source: self.source, date: startedAt ?? Date(), text: lastText))
+                    self.onFinal(TranscriptEntry(id: entryID, source: self.source(), date: startedAt ?? Date(), text: lastText))
                 }
+                logger.info("[\("stream", privacy: .public)] gen \(gen) ended (current: \(isCurrent)): \(error.domain, privacy: .public) \(error.code) \(error.localizedDescription, privacy: .public)")
                 guard isCurrent, self.running else { return }
-                logger.debug("Recognition ended: \(error.code)")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                     guard let self, self.running, gen == self.generation else { return }
                     self.openRequest()
@@ -459,6 +479,70 @@ private final class RecognitionStream {
 }
 
 // MARK: - Audio plumbing
+
+/// Mixes the microphone into the meeting-audio stream (meeting audio drives the clock) and tracks
+/// per-utterance energy of each source to label the text "Tú" or "Remoto".
+private final class SourceMixer {
+    private let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 1, interleaved: false)!
+    private let lock = NSLock()
+    private var micFIFO: [Float] = []
+    private var micEnergy: Float = 0
+    private var remoteEnergy: Float = 0
+    private var micConverter: AVAudioConverter?
+    private var remoteConverter: AVAudioConverter?
+
+    func pushMic(_ buffer: AVAudioPCMBuffer) {
+        guard let mono = convert(buffer, using: &micConverter), let data = mono.floatChannelData?[0] else { return }
+        lock.lock(); defer { lock.unlock() }
+        micFIFO.append(contentsOf: UnsafeBufferPointer(start: data, count: Int(mono.frameLength)))
+        // ponytail: clocks drift; keep at most 0.5 s of mic backlog
+        if micFIFO.count > 24000 { micFIFO.removeFirst(micFIFO.count - 24000) }
+    }
+
+    func mix(remote: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let out = convert(remote, using: &remoteConverter), let data = out.floatChannelData?[0] else { return nil }
+        let n = Int(out.frameLength)
+        lock.lock(); defer { lock.unlock() }
+        var r: Float = 0
+        vDSP_svesq(data, 1, &r, vDSP_Length(n))
+        remoteEnergy += r
+        let take = min(n, micFIFO.count)
+        if take > 0 {
+            micFIFO.withUnsafeBufferPointer { mic in
+                var m: Float = 0
+                vDSP_svesq(mic.baseAddress!, 1, &m, vDSP_Length(take))
+                micEnergy += m
+                vDSP_vadd(data, 1, mic.baseAddress!, 1, data, 1, vDSP_Length(take))
+            }
+            micFIFO.removeFirst(take)
+        }
+        return out
+    }
+
+    func resetEnergy() {
+        lock.lock(); micEnergy = 0; remoteEnergy = 0; lock.unlock()
+    }
+
+    // ponytail: louder source wins; without headphones the mic also hears the meeting, which can mislabel lines
+    func dominantSource() -> TranscriptEntry.Source {
+        lock.lock(); defer { lock.unlock() }
+        return micEnergy > remoteEnergy ? .me : .remote
+    }
+
+    private func convert(_ buffer: AVAudioPCMBuffer, using converter: inout AVAudioConverter?) -> AVAudioPCMBuffer? {
+        if buffer.format == format { return buffer }
+        if converter?.inputFormat != buffer.format { converter = AVAudioConverter(from: buffer.format, to: format) }
+        guard let converter else { return nil }
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / buffer.format.sampleRate) + 64
+        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
+        var fed = false
+        let status = converter.convert(to: out, error: nil) { _, inputStatus in
+            if fed { inputStatus.pointee = .noDataNow; return nil }
+            fed = true; inputStatus.pointee = .haveData; return buffer
+        }
+        return status == .error ? nil : out
+    }
+}
 
 private final class SampleBufferForwarder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     let handler: (AVAudioPCMBuffer) -> Void

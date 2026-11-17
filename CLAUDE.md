@@ -26,8 +26,9 @@ xcodebuild test -project MeetingScribe.xcodeproj -scheme MeetingScribe -only-tes
 
 ### Core Components
 
-- **MeetingRecorder** (`MeetingScribe/MeetingRecorder.swift`) - `@MainActor` state + capture. Mic mode: one `AVAudioEngine` (mixer → mono tap) → stream `.room`. App mode: ScreenCaptureKit app audio → `.remote` + `AVCaptureSession` mic → `.me`. `requiresOnDeviceRecognition = true` always; refuses to start if no on-device model. `toggle()` is the single entry point (UI, menu, ⌥⌘R hot key).
-- **RecognitionStream** (same file) - one per audio source. New request per utterance (pause 1.6 s / 50 s cap / recognizer gave up); old request gets `endAudio()` (not cancel) so its final text still arrives.
+- **MeetingRecorder** (`MeetingScribe/MeetingRecorder.swift`) - `@MainActor` state + capture. Mic mode: one `AVAudioEngine` (mixer → mono tap). App mode (default): ScreenCaptureKit audio (selected app + its helpers, or all system audio) is the clock; `AVCaptureSession` mic is mixed in by `SourceMixer`, which labels each utterance Tú/Remoto by which source was louder. `requiresOnDeviceRecognition = true` always. `toggle()` is the single entry point (UI, menu, ⌥⌘R hot key).
+- **Only ONE recognition task at a time**: on-device `SFSpeechRecognizer` kills the older task (error 1110) when a second starts in the same process — never run one task per source.
+- **RecognitionStream** (same file) - new request per utterance (pause 1.6 s / 50 s cap / recognizer gave up). Opening a new request kills the old task, so the old task's last partial is committed as the final text.
 - **Transcript** (`Transcript.swift`) - `TranscriptEntry` (source Tú/Remoto/none, date, text), plain text + Markdown formatting, `TranscriptStore` autosave/history in `~/Library/Application Support/MeetingScribe/Transcripts/`.
 - **ScreenCaptureManager** - app-level `SCContentFilter` (works with minimised windows), meeting apps listed first.
 - **AppDelegate** - status item derived from `recorder.$isRecording` (red dot + elapsed time), right-click menu, Carbon hot key ⌥⌘R.
