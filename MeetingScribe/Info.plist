@@ -27,9 +27,9 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>MeetingScribe needs microphone access to record and transcribe your meetings.</string>
+    <string>MeetingScribe usa el micrófono para transcribir tus reuniones. El audio nunca sale de tu Mac.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>MeetingScribe uses speech recognition to transcribe your meeting recordings.</string>
+    <string>MeetingScribe convierte la voz en texto con el reconocimiento local de macOS.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 Saraiba. All rights reserved.</string>
     <key>NSPrincipalClass</key>

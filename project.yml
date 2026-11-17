@@ -8,7 +8,6 @@ options:
 
 settings:
   base:
-    PRODUCT_NAME: MeetingScribe
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.9"
@@ -16,6 +15,11 @@ settings:
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES
     COMBINE_HIDPI_IMAGES: YES
+  configs:
+    Debug:
+      ENABLE_TESTABILITY: YES
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      ONLY_ACTIVE_ARCH: YES
 
 targets:
   MeetingScribe:
@@ -29,6 +33,7 @@ targets:
           - "**/MeetingScribeTests/**"
     settings:
       base:
+        PRODUCT_NAME: MeetingScribe
         INFOPLIST_FILE: MeetingScribe/Info.plist
         CODE_SIGN_ENTITLEMENTS: MeetingScribe/MeetingScribe.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -51,6 +56,7 @@ targets:
       - target: MeetingScribe
     settings:
       base:
+        PRODUCT_NAME: MeetingScribeTests
         INFOPLIST_FILE: MeetingScribeTests/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.saraiba.meetingscribe.tests
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/MeetingScribe.app/Contents/MacOS/MeetingScribe"
@@ -67,6 +73,8 @@ schemes:
     test:
       config: Debug
       gatherCoverage: false
+      targets:
+        - MeetingScribeTests
     profile:
       config: Release
     analyze:

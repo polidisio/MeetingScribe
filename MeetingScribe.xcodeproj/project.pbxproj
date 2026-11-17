@@ -7,12 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		054B70B80DEB35DDD578FBB3 /* Transcript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AB96B6E444BC1F39009CDC4 /* Transcript.swift */; };
 		11C3A424AD419C9F36BB2028 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7AA890ABC12476BBC8C98DBF /* Assets.xcassets */; };
 		299EB8E1E9E25FA8BEA716A5 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A34C52042BF573050C3017B /* main.swift */; };
 		2CAE75819FF17CBDD82CC395 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846D6737E8314A0E03A53369 /* ContentView.swift */; };
 		58ED7DDF2BEDF5761517B096 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 238E35F10B674F51345F27DF /* AppDelegate.swift */; };
 		7B06A786081C1B60D1509BBD /* ScreenCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FC975161CA98DD9F974EF2 /* ScreenCaptureManager.swift */; };
-		91FE7D8F9C9726790627A7D0 /* MeetingScribeIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64BD9E25B69F1B1589465B0C /* MeetingScribeIntegrationTests.swift */; };
 		DE88630F316A20804A222CC5 /* MeetingScribeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 692D896651A2F2BDC9B71236 /* MeetingScribeTests.swift */; };
 		EFFD0AF44A202EDB3E3D2AAF /* MeetingRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81FDFAE50C2C11A35EF483C2 /* MeetingRecorder.swift */; };
 /* End PBXBuildFile section */
@@ -32,7 +32,6 @@
 		238E35F10B674F51345F27DF /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		4A34C52042BF573050C3017B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		5D6756ACDAAB81DFACDFEFCC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		64BD9E25B69F1B1589465B0C /* MeetingScribeIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingScribeIntegrationTests.swift; sourceTree = "<group>"; };
 		692D896651A2F2BDC9B71236 /* MeetingScribeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingScribeTests.swift; sourceTree = "<group>"; };
 		69FC975161CA98DD9F974EF2 /* ScreenCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCaptureManager.swift; sourceTree = "<group>"; };
 		793DEB3087CFD524F5987432 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -40,6 +39,7 @@
 		81FDFAE50C2C11A35EF483C2 /* MeetingRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecorder.swift; sourceTree = "<group>"; };
 		846D6737E8314A0E03A53369 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		8BDD11E28F31B8AE97DD63C7 /* MeetingScribeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MeetingScribeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9AB96B6E444BC1F39009CDC4 /* Transcript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Transcript.swift; sourceTree = "<group>"; };
 		A11B964A8751FC9C660EA0FB /* MeetingScribe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MeetingScribe.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -64,6 +64,7 @@
 				81FDFAE50C2C11A35EF483C2 /* MeetingRecorder.swift */,
 				0B4CFF1487FE2336BFC38379 /* MeetingScribe.entitlements */,
 				69FC975161CA98DD9F974EF2 /* ScreenCaptureManager.swift */,
+				9AB96B6E444BC1F39009CDC4 /* Transcript.swift */,
 			);
 			path = MeetingScribe;
 			sourceTree = "<group>";
@@ -81,7 +82,6 @@
 			isa = PBXGroup;
 			children = (
 				793DEB3087CFD524F5987432 /* Info.plist */,
-				64BD9E25B69F1B1589465B0C /* MeetingScribeIntegrationTests.swift */,
 				692D896651A2F2BDC9B71236 /* MeetingScribeTests.swift */,
 			);
 			path = MeetingScribeTests;
@@ -144,7 +144,6 @@
 				};
 			};
 			buildConfigurationList = C93EEFF8F2C0056CBCC42B1F /* Build configuration list for PBXProject "MeetingScribe" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -154,6 +153,7 @@
 			mainGroup = 3C409ABC47E5FC6B4AA06337;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
+			productRefGroup = 589135815D59F5F039B68E15 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -183,6 +183,7 @@
 				2CAE75819FF17CBDD82CC395 /* ContentView.swift in Sources */,
 				EFFD0AF44A202EDB3E3D2AAF /* MeetingRecorder.swift in Sources */,
 				7B06A786081C1B60D1509BBD /* ScreenCaptureManager.swift in Sources */,
+				054B70B80DEB35DDD578FBB3 /* Transcript.swift in Sources */,
 				299EB8E1E9E25FA8BEA716A5 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -191,7 +192,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				91FE7D8F9C9726790627A7D0 /* MeetingScribeIntegrationTests.swift in Sources */,
 				DE88630F316A20804A222CC5 /* MeetingScribeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -210,66 +210,15 @@
 		1949D7ABB084BEDD95D0A205 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
-				CLANG_CXX_LIBRARY = "libc++";
-				CLANG_ENABLE_MODULES = YES;
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_ENABLE_OBJC_WEAK = YES;
-				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
-				CLANG_WARN_BOOL_CONVERSION = YES;
-				CLANG_WARN_COMMA = YES;
-				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
-				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
-				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
-				CLANG_WARN_EMPTY_BODY = YES;
-				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
-				CLANG_WARN_INT_CONVERSION = YES;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
-				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
-				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
-				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
-				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu11;
-				GCC_DYNAMIC_NO_PIC = NO;
-				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_OPTIMIZATION_LEVEL = 0;
-				GCC_PREPROCESSOR_DEFINITIONS = (
-					"$(inherited)",
-					"DEBUG=1",
-				);
-				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
-				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
-				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
-				GCC_WARN_UNUSED_FUNCTION = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0.0;
-				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
-				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
-				PRODUCT_NAME = MeetingScribe;
 				SDKROOT = macosx;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.9;
 			};
@@ -280,73 +229,25 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MeetingScribe/MeetingScribe.entitlements;
-				COMBINE_HIDPI_IMAGES = YES;
 				DEFINES_MODULE = YES;
 				INFOPLIST_FILE = MeetingScribe/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.saraiba.meetingscribe;
 				PRODUCT_MODULE_NAME = MeetingScribe;
-				SDKROOT = macosx;
+				PRODUCT_NAME = MeetingScribe;
 			};
 			name = Release;
 		};
 		4A2564BE5509861E7268A4FE /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
-				CLANG_CXX_LIBRARY = "libc++";
-				CLANG_ENABLE_MODULES = YES;
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_ENABLE_OBJC_WEAK = YES;
-				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
-				CLANG_WARN_BOOL_CONVERSION = YES;
-				CLANG_WARN_COMMA = YES;
-				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
-				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
-				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
-				CLANG_WARN_EMPTY_BODY = YES;
-				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
-				CLANG_WARN_INT_CONVERSION = YES;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
-				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
-				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
-				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_NS_ASSERTIONS = NO;
-				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu11;
-				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
-				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
-				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
-				GCC_WARN_UNUSED_FUNCTION = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0.0;
-				MTL_ENABLE_DEBUG_INFO = NO;
-				MTL_FAST_MATH = YES;
-				PRODUCT_NAME = MeetingScribe;
 				SDKROOT = macosx;
-				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.9;
 			};
 			name = Release;
@@ -355,15 +256,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				COMBINE_HIDPI_IMAGES = YES;
 				INFOPLIST_FILE = MeetingScribeTests/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/../Frameworks",
-				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.saraiba.meetingscribe.tests;
-				SDKROOT = macosx;
+				PRODUCT_NAME = MeetingScribeTests;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MeetingScribe.app/Contents/MacOS/MeetingScribe";
 			};
 			name = Debug;
@@ -373,13 +268,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MeetingScribe/MeetingScribe.entitlements;
-				COMBINE_HIDPI_IMAGES = YES;
 				DEFINES_MODULE = YES;
 				INFOPLIST_FILE = MeetingScribe/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.saraiba.meetingscribe;
 				PRODUCT_MODULE_NAME = MeetingScribe;
-				SDKROOT = macosx;
+				PRODUCT_NAME = MeetingScribe;
 			};
 			name = Debug;
 		};
@@ -387,15 +281,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				COMBINE_HIDPI_IMAGES = YES;
 				INFOPLIST_FILE = MeetingScribeTests/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/../Frameworks",
-				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.saraiba.meetingscribe.tests;
-				SDKROOT = macosx;
+				PRODUCT_NAME = MeetingScribeTests;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MeetingScribe.app/Contents/MacOS/MeetingScribe";
 			};
 			name = Release;

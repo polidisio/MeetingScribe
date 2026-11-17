@@ -1,150 +1,134 @@
 import AppKit
 import SwiftUI
-import AVFoundation
-import Speech
+import Combine
+import Carbon.HIToolbox
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private var recorder: MeetingRecorder!
+    private let recorder = MeetingRecorder()
     private var popover: NSPopover!
     private var eventMonitor: Any?
+    private var recordingObserver: AnyCancellable?
+    private var clock: Timer?
+    private var hotKey: EventHotKeyRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        recorder = MeetingRecorder()
-
-        // Setup status bar item
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "MeetingScribe")
-            button.action = #selector(showPopoverAndMenu)
+            button.action = #selector(statusItemClicked)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.imagePosition = .imageLeading
+            button.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
         }
 
-        // Build popover content
-        let contentView = ContentView(recorder: recorder, statusItem: statusItem)
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 350, height: 450)
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: contentView)
+        popover.animates = true
+        popover.contentViewController = NSHostingController(rootView: ContentView(recorder: recorder))
 
-        // Monitor for clicks outside to close popover
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            if self?.popover.isShown == true {
-                self?.popover.performClose(nil)
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if self?.popover.isShown == true { self?.popover.performClose(nil) }
             }
         }
+
+        // Single source of truth: the icon follows the recorder, whoever started/stopped it.
+        recordingObserver = recorder.$isRecording.receive(on: RunLoop.main).sink { [weak self] recording in
+            self?.recordingChanged(recording)
+        }
+        registerHotKey()
     }
 
-    @objc func showPopoverAndMenu(_ sender: NSStatusBarButton) {
-        let event = NSApp.currentEvent!
+    // MARK: - Status item
 
-        if event.type == .rightMouseUp {
-            // Right click - show menu
-            showMenu()
+    private func recordingChanged(_ recording: Bool) {
+        clock?.invalidate(); clock = nil
+        if recording {
+            clock = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshStatusItem() }
+            }
+        }
+        refreshStatusItem()
+    }
+
+    private func refreshStatusItem() {
+        guard let button = statusItem.button else { return }
+        if recorder.isRecording, let start = recorder.startDate {
+            button.image = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Grabando")
+            button.contentTintColor = .systemRed
+            button.title = " " + Transcript.duration(Date().timeIntervalSince(start))
         } else {
-            // Left click - toggle popover
-            if popover.isShown {
-                popover.performClose(nil)
-            } else {
-                showPopover()
-            }
+            button.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "MeetingScribe")
+            button.contentTintColor = nil
+            button.title = ""
         }
     }
 
-    @objc func showPopover() {
-        if let button = statusItem.button {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            NSApp.activate(ignoringOtherApps: true)
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showMenu()
+        } else if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            showPopover()
         }
     }
 
-    func showMenu() {
+    @objc private func showPopover() {
+        guard let button = statusItem.button else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showMenu() {
         let menu = NSMenu()
-
-        let recordTitle = recorder.isRecording ? "Stop Recording" : "Start Recording"
-        let recordItem = NSMenuItem(title: recordTitle, action: #selector(toggleRecording), keyEquivalent: "r")
-        recordItem.target = self
-        menu.addItem(recordItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let openUIItem = NSMenuItem(title: "Open UI", action: #selector(showPopover), keyEquivalent: "")
-        openUIItem.target = self
-        menu.addItem(openUIItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let aboutItem = NSMenuItem(title: "About MeetingScribe", action: #selector(showAbout), keyEquivalent: "")
-        aboutItem.target = self
-        menu.addItem(aboutItem)
-
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(quitItem)
+        let record = NSMenuItem(title: recorder.isRecording ? "Detener grabación" : "Empezar a grabar",
+                                action: #selector(toggleRecording), keyEquivalent: "r")
+        record.keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(record)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Abrir MeetingScribe", action: #selector(showPopover), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Carpeta de transcripciones", action: #selector(openTranscriptsFolder), keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Acerca de MeetingScribe", action: #selector(showAbout), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Salir", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.items.filter { $0.action != #selector(NSApplication.terminate(_:)) }.forEach { $0.target = self }
 
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
     }
 
-    @objc func toggleRecording() {
-        if recorder.isRecording {
-            recorder.stopRecording()
-            statusItem.button?.image = NSImage(
-                systemSymbolName: "mic.fill",
-                accessibilityDescription: "Start Recording"
-            )
-        } else {
-            requestPermissionsAndStartRecording()
-        }
+    @objc private func toggleRecording() {
+        Task { await recorder.toggle() }
     }
 
-    private func requestPermissionsAndStartRecording() {
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            guard let self = self else { return }
-            DispatchQueue.main.async {
-                if granted {
-                    SFSpeechRecognizer.requestAuthorization { status in
-                        DispatchQueue.main.async {
-                            if status == .authorized {
-                                self.recorder.startRecording()
-                                self.statusItem.button?.image = NSImage(
-                                    systemSymbolName: "stop.fill",
-                                    accessibilityDescription: "Stop Recording"
-                                )
-                            } else {
-                                self.showAlert(title: "Permission Denied", message: "Speech recognition permission denied")
-                            }
-                        }
-                    }
-                } else {
-                    self.showAlert(title: "Permission Denied", message: "Microphone permission denied")
-                }
-            }
-        }
+    @objc private func openTranscriptsFolder() {
+        NSWorkspace.shared.open(TranscriptStore.directory)
     }
 
-    private func showAlert(title: String, message: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
-    @objc func showAbout() {
+    @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
         NSApp.orderFrontStandardAboutPanel(nil)
     }
 
-    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
-        return true
+    // MARK: - Global shortcut ⌥⌘R (Carbon hot key: works without Accessibility permission)
+
+    private func registerHotKey() {
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, context in
+            guard let context else { return noErr }
+            let delegate = Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue()
+            DispatchQueue.main.async { MainActor.assumeIsolated { delegate.toggleRecording() } }
+            return noErr
+        }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), nil)
+
+        RegisterEventHotKey(UInt32(kVK_ANSI_R), UInt32(cmdKey | optionKey),
+                            EventHotKeyID(signature: OSType(0x4D534352), id: 1),  // 'MSCR'
+                            GetApplicationEventTarget(), 0, &hotKey)
     }
 
-    deinit {
-        if let monitor = eventMonitor {
-            NSEvent.removeMonitor(monitor)
-        }
-    }
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 }

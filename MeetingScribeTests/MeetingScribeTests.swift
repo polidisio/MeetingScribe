@@ -1,76 +1,63 @@
 import XCTest
 @testable import MeetingScribe
 
-final class MeetingScribeTests: XCTestCase {
+final class TranscriptTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 
-    func testMeetingRecorderInitialState() {
-        let recorder = MeetingRecorder()
-        XCTAssertFalse(recorder.isRecording, "Recorder should not be recording initially")
-        XCTAssertEqual(recorder.transcription, "", "Transcription should be empty initially")
-        XCTAssertNil(recorder.errorMessage, "Error message should be nil initially")
+    private func transcript(_ entries: [TranscriptEntry]) -> Transcript {
+        Transcript(entries: entries, start: t0, end: t0.addingTimeInterval(125), sourceName: "Zoom + micrófono", language: "es-ES")
     }
 
-    func testMeetingRecorderReset() {
-        let recorder = MeetingRecorder()
-        recorder.reset()
-        XCTAssertEqual(recorder.transcription, "", "Transcription should be empty after reset")
-        XCTAssertNil(recorder.errorMessage, "Error message should be nil after reset")
+    func testPlainTextKeepsChronologicalOrderAndLabels() {
+        let t = transcript([
+            TranscriptEntry(source: .remote, date: t0, text: "Hola, ¿me oyes?"),
+            TranscriptEntry(source: .me, date: t0.addingTimeInterval(3), text: "Sí, perfecto"),
+            TranscriptEntry(source: .remote, date: t0.addingTimeInterval(6), text: "Empezamos"),
+        ])
+        let lines = t.plainText.split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.count, 3)
+        XCTAssertTrue(lines[0].hasSuffix("Remoto: Hola, ¿me oyes?"))
+        XCTAssertTrue(lines[1].hasSuffix("Tú: Sí, perfecto"))
+        XCTAssertTrue(lines[2].hasSuffix("Remoto: Empezamos"))
     }
 
-    func testDateStringFormat() {
-        // Test that date string is properly formatted
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HHmmss"
-        let dateString = formatter.string(from: Date())
-
-        // Should match pattern: YYYY-MM-DD_HHMMSS
-        let regex = #"^\d{4}-\d{2}-\d{2}_\d{6}$"#
-        XCTAssertTrue(dateString.range(of: regex, options: .regularExpression) != nil,
-                      "Date string should match format YYYY-MM-DD_HHmmss")
+    func testRoomEntriesHaveNoSpeakerLabel() {
+        let t = transcript([TranscriptEntry(source: .room, date: t0, text: "Texto")])
+        XCTAssertEqual(t.plainText, "[\(Transcript.time.string(from: t0))] Texto")
     }
 
-    func testContentViewRendering() {
-        // Test that ContentView can be initialized without crashing
-        let recorder = MeetingRecorder()
-        let mockStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        // This would need actual NSStatusItem mock in real test
-        // For now just test recorder works
-        XCTAssertNotNil(recorder)
+    func testMarkdownHasHeaderAndEntries() {
+        let md = transcript([TranscriptEntry(source: .me, date: t0, text: "Uno dos tres")]).markdown
+        XCTAssertTrue(md.hasPrefix("# Reunión — "))
+        XCTAssertTrue(md.contains("**Duración:** 02:05"))
+        XCTAssertTrue(md.contains("**Palabras:** 3"))
+        XCTAssertTrue(md.contains("**Tú** — Uno dos tres"))
+    }
+
+    func testDurationFormatting() {
+        XCTAssertEqual(Transcript.duration(0), "00:00")
+        XCTAssertEqual(Transcript.duration(754), "12:34")
+        XCTAssertEqual(Transcript.duration(3725), "1:02:05")
+    }
+
+    func testStoreSavesAndListsWithPreview() throws {
+        let t = transcript([TranscriptEntry(source: .me, date: t0, text: "Prueba de historial")])
+        let url = try TranscriptStore.save(t)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let item = try XCTUnwrap(TranscriptStore.recent().first { $0.url == url })
+        XCTAssertEqual(item.preview, "Tú — Prueba de historial")
+        XCTAssertEqual(item.date, t0)
     }
 }
 
-// MARK: - UI Tests
-final class MeetingScribeUITests: XCTestCase {
-
-    var app: XCUIApplication!
-
-    override func setUp() {
-        super.setUp()
-        app = XCUIApplication()
-        app.launchArguments = ["--disable-mic-check"] // For testing without actual mic
-    }
-
-    override func tearDown() {
-        app = nil
-        super.tearDown()
-    }
-
-    func testAppLaunch() {
-        app.launch()
-        // App should launch without crash
-        XCTAssertTrue(app.exists)
-    }
-
-    func testStatusBarIconExists() {
-        app.launch()
-        // Check that status bar item exists
-        // Note: This is hard to test in XCTest without accessibility identifiers
-    }
-
-    func testMenuItems() {
-        app.launch()
-        // Test menu structure
-        let menuBar = app.menubars.firstMatch
-        XCTAssertTrue(menuBar.exists, "Menu bar should exist")
+@MainActor
+final class MeetingRecorderTests: XCTestCase {
+    func testInitialStateAndReset() {
+        let recorder = MeetingRecorder()
+        XCTAssertFalse(recorder.isRecording)
+        XCTAssertTrue(recorder.entries.isEmpty)
+        recorder.reset()
+        XCTAssertEqual(recorder.transcription, "")
+        XCTAssertNil(recorder.errorMessage)
     }
 }

@@ -3,522 +3,479 @@ import AVFoundation
 import Speech
 import CoreAudio
 import ScreenCaptureKit
+import Accelerate
+import os
 
-class MeetingRecorder: NSObject, ObservableObject {
-    private var audioEngine: AVAudioEngine?
-    private var mixerNode: AVAudioMixerNode?
-    private var speechRecognizer: SFSpeechRecognizer?
-    private var micSpeechRecognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    private var rotationTimer: Timer?
-    private var accumulatedText = ""
+private let logger = Logger(subsystem: "com.saraiba.meetingscribe", category: "recorder")
 
-    // Separate recognizer and session for mic audio
-    private var micRecognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var micRecognitionTask: SFSpeechRecognitionTask?
-    private var micCaptureSession: AVCaptureSession?
-    private var micAudioInput: AVCaptureInput?
+enum CaptureMode: String, CaseIterable, Identifiable {
+    case microphone, app
+    var id: String { rawValue }
+    var title: String { self == .microphone ? "Micrófono" : "App de reunión" }
+}
 
-    @Published var isRecording = false
-    @Published var transcription = ""
+@MainActor
+final class MeetingRecorder: NSObject, ObservableObject {
+    static let languages: [(id: String, name: String)] = [
+        ("es-ES", "Español (España)"),
+        ("es-MX", "Español (México)"),
+        ("en-US", "English (US)"),
+        ("en-GB", "English (UK)"),
+    ]
+
+    @Published private(set) var isRecording = false
+    @Published private(set) var entries: [TranscriptEntry] = []
+    @Published private(set) var partials: [TranscriptEntry.Source: TranscriptEntry] = [:]
+    @Published private(set) var audioLevel: Float = 0
+    @Published private(set) var startDate: Date?
+    @Published private(set) var endDate: Date?
+    @Published private(set) var lastSavedURL: URL?
     @Published var errorMessage: String?
+    @Published var errorSettingsURL: URL?
     @Published var availableDevices: [AVCaptureDevice] = []
-    @Published var selectedDeviceID: String? = nil
-
-    // Keep dual-picker API for UI compatibility — merged into one stream
-    var remoteDeviceID: String? {
-        get { selectedDeviceID }
-        set { selectedDeviceID = newValue }
+    @Published var selectedDeviceID: String?
+    @Published var captureMode: CaptureMode {
+        didSet { UserDefaults.standard.set(captureMode.rawValue, forKey: "captureMode") }
     }
-    var localDeviceID: String? = nil  // reserved for future use
+    @Published var language: String {
+        didSet { UserDefaults.standard.set(language, forKey: "language") }
+    }
 
-    var mergedTranscription: String { formatSpeakerOutput() }
+    let screenCapture = ScreenCaptureManager()
 
-    private var logFile: URL?
+    private var streams: [RecognitionStream] = []
+    private var audioEngine: AVAudioEngine?
+    private var micSession: AVCaptureSession?
+    private var micDelegate: SampleBufferForwarder?
+    private var ticker: Timer?
+    private var sessionSource = ""
 
-    // Speaker diarization
-    private var speakerTranscripts: [Int: String] = [:]
-    private var allSegments: [SFTranscriptionSegment] = []
+    /// Plain-text transcript (copy / Aria).
+    var transcription: String { transcript.plainText }
+
+    var transcript: Transcript {
+        Transcript(entries: entries, start: startDate ?? Date(), end: endDate ?? Date(),
+                   sourceName: sessionSource, language: language)
+    }
+
+    var languageName: String {
+        Self.languages.first { $0.id == language }?.name ?? language
+    }
 
     override init() {
+        let defaults = UserDefaults.standard
+        captureMode = CaptureMode(rawValue: defaults.string(forKey: "captureMode") ?? "") ?? .microphone
+        language = defaults.string(forKey: "language") ?? "es-ES"
         super.init()
-        setupSpeechRecognizer()
-        setupLogFile()
         refreshAvailableDevices()
     }
 
-    private func setupSpeechRecognizer() {
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "es-ES"))
-        micSpeechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "es-ES"))
-    }
-
-    private func setupLogFile() {
-        let desktopPath = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!
-        logFile = desktopPath.appendingPathComponent("MeetingScribe_log.txt")
-        log("=== MeetingScribe started ===")
-    }
-
     func refreshAvailableDevices() {
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.microphone, .external],
-            mediaType: .audio,
-            position: .unspecified
-        )
-        DispatchQueue.main.async {
-            self.availableDevices = session.devices
-            self.log("Refreshed available devices: \(session.devices.map { $0.localizedName })")
-        }
-    }
-
-    private func log(_ message: String) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let logLine = "[\(timestamp)] \(message)\n"
-        if let logFile = logFile {
-            if let handle = try? FileHandle(forWritingTo: logFile) {
-                handle.seekToEndOfFile()
-                if let data = logLine.data(using: .utf8) { handle.write(data) }
-                handle.closeFile()
-            } else {
-                try? logLine.write(to: logFile, atomically: true, encoding: .utf8)
-            }
-        }
-        print(logLine, terminator: "")
+        availableDevices = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified
+        ).devices
     }
 
     // MARK: - Start / Stop
 
-    func startRecording() {
-        transcription = ""
-        accumulatedText = ""
+    func toggle() async {
+        if isRecording { await stop() } else { await start() }
+    }
+
+    func start() async {
+        guard !isRecording else { return }
         errorMessage = nil
-        log("Start recording requested")
+        errorSettingsURL = nil
 
-        guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            errorMessage = "Speech recognition not authorized"; return
+        guard await Self.speechAuthorized() else {
+            return fail("Permiso de reconocimiento de voz denegado.", pane: "Privacy_SpeechRecognition")
         }
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            errorMessage = "Microphone not authorized"; return
+        guard await AVCaptureDevice.requestAccess(for: .audio) else {
+            return fail("Permiso de micrófono denegado.", pane: "Privacy_Microphone")
+        }
+        guard let probe = SFSpeechRecognizer(locale: Locale(identifier: language)), probe.isAvailable else {
+            return fail("El reconocimiento de voz para \(languageName) no está disponible ahora mismo.")
+        }
+        // Privacy promise: audio never leaves the Mac. No on-device model → refuse rather than fall back to Apple's servers.
+        guard probe.supportsOnDeviceRecognition else {
+            return fail("Falta el modelo local de \(languageName). Descárgalo en Ajustes del Sistema › Teclado › Dictado.",
+                        settingsURL: URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension"))
         }
 
+        reset()
+        startDate = Date()
         do {
-            try startCapture()
-            DispatchQueue.main.async { self.isRecording = true }
-        } catch {
-            log("ERROR starting: \(error.localizedDescription)")
-            errorMessage = "Failed to start: \(error.localizedDescription)"
-            stopRecording()
-        }
-    }
-
-    private func startCapture() throws {
-        let engine = AVAudioEngine()
-        audioEngine = engine
-
-        // Device priority: user selection → Aggregate containing all sources → BlackHole → default
-        // ONE engine reads from ONE device — CoreAudio does not support two simultaneous engines well
-        let deviceID = selectedDeviceID
-            ?? findDeviceID(containing: "Capture")   // "MeetingScribe Capture" aggregate
-            ?? findDeviceID(containing: "Meeting")   // legacy "Meeting" aggregate
-            ?? findDeviceID(containing: "BlackHole") // BlackHole standalone fallback
-        if let id = deviceID {
-            setEngineInputDevice(id, engine: engine)
-        }
-
-        // Create recognition request BEFORE installing tap
-        let request = makeRequest()
-        recognitionRequest = request
-
-        let hwFormat = engine.inputNode.inputFormat(forBus: 0)
-        let outFormat = engine.inputNode.outputFormat(forBus: 0)
-        log("HW format: \(hwFormat.channelCount) ch, \(hwFormat.sampleRate) Hz | Tap format: \(outFormat.channelCount) ch, \(outFormat.sampleRate) Hz | device: \(deviceID ?? "default")")
-
-        // Guard against invalid format (0 channels = device not properly open)
-        guard hwFormat.channelCount > 0, hwFormat.sampleRate > 0 else {
-            log("ERROR: Invalid audio format (channels=\(hwFormat.channelCount), sampleRate=\(hwFormat.sampleRate))")
-            throw NSError(domain: "MeetingRecorder", code: 10, userInfo: [NSLocalizedDescriptionKey: "Audio device not available. Try selecting a different device in settings."])
-        }
-
-        // Use a mixer node to properly downmix ALL Aggregate channels (AirPods + BlackHole)
-        // to mono. A direct tap on inputNode with outputFormat may silently drop non-first channels.
-        let mixer = AVAudioMixerNode()
-        mixerNode = mixer
-        engine.attach(mixer)
-        engine.connect(engine.inputNode, to: mixer, format: hwFormat)
-
-        let monoFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: hwFormat.sampleRate,
-            channels: 1,
-            interleaved: false
-        )!
-
-        var bufferCount = 0
-        mixer.installTap(onBus: 0, bufferSize: 4096, format: monoFormat) { [weak self] buf, _ in
-            self?.recognitionRequest?.append(buf)
-            bufferCount += 1
-            // Log per-channel RMS every ~4s via hwFormat buffer (mixer input has all channels)
-            if bufferCount % 25 == 0, let ch = buf.floatChannelData?[0] {
-                let rms = (0..<Int(buf.frameLength)).map { ch[$0] * ch[$0] }.reduce(0, +) / Float(buf.frameLength)
-                self?.log("Mono RMS: \(String(format: "%.6f", rms)) (\(deviceID ?? "default"))")
+            switch captureMode {
+            case .microphone: try startMicrophoneMode()
+            case .app: try await startAppMode()
             }
+            isRecording = true
+            ticker = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.tick() }
+            }
+            logger.info("Recording started (\(self.captureMode.rawValue, privacy: .public))")
+        } catch {
+            logger.error("Start failed: \(error.localizedDescription, privacy: .public)")
+            await tearDownAudio()
+            streams = []
+            startDate = nil
+            if errorMessage == nil { fail(error.localizedDescription) }
         }
-
-        startRecognitionTask()
-        engine.prepare()
-        try engine.start()
-        scheduleRotation()
-        log("Capture started on device: \(deviceID ?? "default")")
     }
 
-    func stopRecording() {
-        log("Stop recording called")
-        rotationTimer?.invalidate(); rotationTimer = nil
-        mixerNode?.removeTap(onBus: 0)
-        mixerNode = nil
-        audioEngine?.stop()
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        recognitionRequest = nil
-        recognitionTask = nil
-        audioEngine = nil
-        log("Recording stopped, transcription length: \(transcription.count)")
-        DispatchQueue.main.async { self.isRecording = false }
+    func stop() async {
+        guard isRecording else { return }
+        ticker?.invalidate(); ticker = nil
+        await tearDownAudio()
+        streams.forEach { $0.stop() }
+        streams = []
+        // Whatever was still in flight becomes a regular entry — nothing is dropped on stop.
+        partials.values.sorted { $0.date < $1.date }.forEach(insert)
+        partials = [:]
+        audioLevel = 0
+        endDate = Date()
+        isRecording = false
+        if !entries.isEmpty {
+            do { lastSavedURL = try TranscriptStore.save(transcript) }
+            catch { fail("No se pudo guardar automáticamente: \(error.localizedDescription)") }
+        }
+        logger.info("Recording stopped, \(self.entries.count) entries")
     }
 
     func reset() {
-        transcription = ""
-        accumulatedText = ""
-        speakerTranscripts = [:]
-        allSegments = []
+        entries = []
+        partials = [:]
+        startDate = nil
+        endDate = nil
+        lastSavedURL = nil
         errorMessage = nil
-        log("Reset called")
+        errorSettingsURL = nil
     }
 
-    // MARK: - Speaker Output Formatting
+    private func fail(_ message: String, pane: String? = nil, settingsURL: URL? = nil) {
+        errorMessage = message
+        errorSettingsURL = settingsURL
+            ?? pane.flatMap { URL(string: "x-apple.systempreferences:com.apple.preference.security?\($0)") }
+    }
 
-    private func formatSpeakerOutput() -> String {
-        guard !speakerTranscripts.isEmpty else { return transcription }
-        var lines: [String] = []
-        for speaker in speakerTranscripts.keys.sorted() {
-            let text = speakerTranscripts[speaker]?.trimmingCharacters(in: .whitespaces) ?? ""
-            if !text.isEmpty {
-                lines.append("Person \(speaker): \(text)")
+    private static func speechAuthorized() async -> Bool {
+        await withCheckedContinuation { c in
+            SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
+        }
+    }
+
+    // MARK: - Streams
+
+    private func makeStream(_ source: TranscriptEntry.Source) throws -> RecognitionStream {
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: language)) else {
+            throw RecorderError("No se pudo crear el reconocedor de voz.")
+        }
+        let stream = RecognitionStream(source: source, recognizer: recognizer)
+        stream.onPartial = { [weak self] entry in
+            MainActor.assumeIsolated { self?.partials[source] = entry }
+        }
+        stream.onFinal = { [weak self] entry in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.partials[source]?.id == entry.id { self.partials[source] = nil }
+                self.insert(entry)
             }
         }
-        return lines.joined(separator: "\n")
+        streams.append(stream)
+        stream.start()
+        return stream
     }
 
-    // MARK: - Recognition
-
-    private func makeRequest() -> SFSpeechAudioBufferRecognitionRequest {
-        let req = SFSpeechAudioBufferRecognitionRequest()
-        req.shouldReportPartialResults = true
-        req.requiresOnDeviceRecognition = false
-        return req
+    private func insert(_ entry: TranscriptEntry) {
+        guard !entry.text.isEmpty, !entries.contains(where: { $0.id == entry.id }) else { return }
+        let index = entries.lastIndex { $0.date <= entry.date }.map { $0 + 1 } ?? 0
+        entries.insert(entry, at: index)
     }
 
-    private func startRecognitionTask() {
-        guard let recognizer = speechRecognizer, let request = recognitionRequest else { return }
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self = self else { return }
-            if let result = result {
-                let partial = result.bestTranscription.formattedString
-                if result.isFinal {
-                    self.accumulatedText += partial + " "
-                    self.log("Final segment: \(partial)")
-                    self.processSegments(result.bestTranscription.segments)
-                    DispatchQueue.main.async { self.transcription = self.formatSpeakerOutput() }
-                } else {
-                    DispatchQueue.main.async { self.transcription = self.formatSpeakerOutput() + "\n[Partial: \(partial)]" }
-                }
-            }
-            if let error = error as NSError?, error.code != 301 {
-                self.log("Recognition error: \(error.localizedDescription) (\(error.code))")
+    private func tick() {
+        streams.forEach { $0.segmentIfPaused() }
+    }
+
+    private nonisolated func reportLevel(_ buffer: AVAudioPCMBuffer) {
+        let level = Self.level(of: buffer)
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.isRecording else { return }
+                self.audioLevel = max(level, self.audioLevel * 0.85)  // fast attack, slow decay
             }
         }
     }
 
-    private func processSegments(_ segments: [SFTranscriptionSegment], source: String = "screen") {
-        // Screen capture audio = Person 2 (remote participants)
-        // Microphone audio = Person 1 (local speaker)
-        let baseSpeaker = (source == "mic") ? 1 : 2
-        var currentSpeaker = baseSpeaker
-        var lastTimestamp: TimeInterval = 0
-        let pauseThreshold: TimeInterval = 2.0
-
-        for segment in segments {
-            if !allSegments.contains(where: { $0.timestamp == segment.timestamp && $0.substring == segment.substring && $0.timestamp > lastTimestamp - 0.1 }) {
-                allSegments.append(segment)
-
-                let pause = segment.timestamp - lastTimestamp
-                if pause > pauseThreshold && lastTimestamp > 0 {
-                    currentSpeaker += 2  // Skip to next pair to separate screen vs mic
-                    if currentSpeaker > 4 { currentSpeaker = baseSpeaker }
-                }
-                lastTimestamp = segment.timestamp
-
-                let existing = speakerTranscripts[currentSpeaker] ?? ""
-                speakerTranscripts[currentSpeaker] = existing + segment.substring + " "
-            }
+    nonisolated static func level(of buffer: AVAudioPCMBuffer) -> Float {
+        let n = vDSP_Length(buffer.frameLength)
+        guard n > 0 else { return 0 }
+        var meanSquare: Float = 0
+        if let f = buffer.floatChannelData {
+            vDSP_measqv(f[0], 1, &meanSquare, n)
+        } else if let i = buffer.int16ChannelData {
+            var floats = [Float](repeating: 0, count: Int(n))
+            vDSP_vflt16(i[0], 1, &floats, 1, n)
+            vDSP_measqv(floats, 1, &meanSquare, n)
+            meanSquare /= Float(Int16.max) * Float(Int16.max)
         }
-        log("Diarization [\(source)]: \(speakerTranscripts.count) speaker(s), \(allSegments.count) total segments")
+        let db = 10 * log10(meanSquare + 1e-10)
+        // ponytail: maps -55…-5 dBFS to 0…1; tune if the meter sits too low/high on your mic
+        return max(0, min(1, (db + 55) / 50))
     }
 
-    // MARK: - Session rotation (before the ~60s SFSpeechRecognizer hard limit)
+    // MARK: - Microphone mode (one AVAudioEngine, one device)
 
-    private func scheduleRotation() {
-        rotationTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in
-            self?.rotateSession()
+    private func startMicrophoneMode() throws {
+        let stream = try makeStream(.room)
+        let engine = AVAudioEngine()
+        audioEngine = engine
+
+        // Priority: user selection → "MeetingScribe Capture" aggregate → legacy "Meeting" aggregate → BlackHole → default
+        let deviceUID = selectedDeviceID
+            ?? findDeviceUID(containing: "Capture")
+            ?? findDeviceUID(containing: "Meeting")
+            ?? findDeviceUID(containing: "BlackHole")
+        if let uid = deviceUID { setInputDevice(uid, engine: engine) }
+        sessionSource = availableDevices.first { $0.uniqueID == deviceUID }?.localizedName
+            ?? AVCaptureDevice.default(for: .audio)?.localizedName ?? "Micrófono"
+
+        let hwFormat = engine.inputNode.inputFormat(forBus: 0)
+        logger.info("HW format: \(hwFormat.channelCount) ch, \(hwFormat.sampleRate) Hz")
+        guard hwFormat.channelCount > 0, hwFormat.sampleRate > 0 else {
+            throw RecorderError("El dispositivo de audio no está disponible. Prueba con otro.")
         }
+
+        // Mixer downmixes ALL aggregate channels (mic + BlackHole) to mono; a direct tap can drop non-first channels.
+        let mixer = AVAudioMixerNode()
+        engine.attach(mixer)
+        engine.connect(engine.inputNode, to: mixer, format: hwFormat)
+        let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: hwFormat.sampleRate,
+                                 channels: 1, interleaved: false)!
+        mixer.installTap(onBus: 0, bufferSize: 4096, format: mono) { [weak self] buf, _ in
+            stream.append(buf)
+            self?.reportLevel(buf)
+        }
+        engine.prepare()
+        try engine.start()
     }
 
-    private func rotateSession() {
-        log("Rotating session | Speakers: \(speakerTranscripts.keys.sorted()) | Segments: \(allSegments.count)")
-        let newRequest = makeRequest()
-        let oldRequest = recognitionRequest
-        let oldTask = recognitionTask
-        recognitionRequest = newRequest
-        startRecognitionTask()
-        oldRequest?.endAudio()
-        oldTask?.cancel()
+    // MARK: - App mode (ScreenCaptureKit app audio = Remoto, microphone = Tú)
+
+    private func startAppMode() async throws {
+        guard let app = screenCapture.selectedApp else {
+            throw RecorderError("Elige la app de la reunión (Zoom, Teams, Chrome…).")
+        }
+        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
+            fail("Concede «Grabación de pantalla y audio del sistema» a MeetingScribe y vuelve a abrir la app.",
+                 pane: "Privacy_ScreenCapture")
+            throw RecorderError("Permiso de grabación de pantalla denegado.")
+        }
+        sessionSource = "\(app.applicationName) + micrófono"
+
+        let remote = try makeStream(.remote)
+        screenCapture.onAudioBuffer = { [weak self] buffer in
+            remote.append(buffer)
+            self?.reportLevel(buffer)
+        }
+        try await screenCapture.startCapture(app: app)
+
+        let me = try makeStream(.me)
+        try startMicSession(into: me)
     }
 
-    // MARK: - ScreenCaptureKit integration
-
-    @available(macOS 12.3, *)
-    func startScreenCapture(with manager: ScreenCaptureManager) async throws {
-        guard let app = manager.selectedApp else {
-            throw NSError(domain: "MeetingRecorder", code: 1, userInfo: [NSLocalizedDescriptionKey: "No app selected"])
-        }
-
-        transcription = ""
-        accumulatedText = ""
-        speakerTranscripts = [:]
-        allSegments = []
-        errorMessage = nil
-        log("Start screen capture requested for: \(app.applicationName)")
-
-        guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            throw NSError(domain: "MeetingRecorder", code: 2, userInfo: [NSLocalizedDescriptionKey: "Speech recognition not authorized"])
-        }
-
-        // Create requests for BOTH audio sources
-        let screenRequest = makeRequest()
-        let micRequest = makeRequest()
-        recognitionRequest = screenRequest
-        micRecognitionRequest = micRequest
-
-        // Setup screen capture audio
-        var screenBufferCount = 0
-        manager.onAudioBuffer = { [weak self] buffer in
-            screenBufferCount += 1
-            if screenBufferCount % 25 == 0 {
-                self?.log("SCREAM: appending buffer #\(screenBufferCount), \(buffer.frameLength) frames, \(buffer.format.channelCount) ch")
-            }
-            self?.recognitionRequest?.append(buffer)
-        }
-
-        try await manager.startCapture(app: app)
-        startRecognitionTask()
-        scheduleRotation()
-
-        // Start mic capture after a delay to let ScreenCaptureKit stabilize audio resources
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self = self else { return }
-            do {
-                try self.startMicCaptureSession(request: micRequest)
-                self.log("Mic capture started after delay")
-            } catch {
-                self.log("Mic capture failed after delay: \(error)")
-            }
-        }
-
-        await MainActor.run {
-            self.isRecording = true
-        }
-        log("Screen + Mic capture started for: \(app.applicationName)")
-    }
-
-    private func startMicCaptureSession(request: SFSpeechAudioBufferRecognitionRequest) throws {
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            throw NSError(domain: "MeetingRecorder", code: 3, userInfo: [NSLocalizedDescriptionKey: "Microphone not authorized"])
-        }
+    // AVCaptureSession (not a second AVAudioEngine): two engines conflict in CoreAudio.
+    private func startMicSession(into stream: RecognitionStream) throws {
+        let device = selectedDeviceID.flatMap { AVCaptureDevice(uniqueID: $0) } ?? AVCaptureDevice.default(for: .audio)
+        guard let device else { throw RecorderError("No se encontró ningún micrófono.") }
+        logger.info("Mic: \(device.localizedName, privacy: .public)")
 
         let session = AVCaptureSession()
-        micCaptureSession = session
-
-        guard let mic = AVCaptureDevice.default(for: .audio) else {
-            throw NSError(domain: "MeetingRecorder", code: 4, userInfo: [NSLocalizedDescriptionKey: "No microphone found"])
-        }
-
-        log("Using microphone: \(mic.localizedName)")
-
-        let input = try AVCaptureDeviceInput(device: mic)
-        micAudioInput = input
-
-        if session.canAddInput(input) {
-            session.addInput(input)
-        }
-
+        let input = try AVCaptureDeviceInput(device: device)
+        if session.canAddInput(input) { session.addInput(input) }
         let output = AVCaptureAudioDataOutput()
-        let outputQueue = DispatchQueue(label: "com.meetingscribe.micaudio")
-
-        output.setSampleBufferDelegate(MicAudioDelegate(request: request, recorder: self), queue: outputQueue)
-
-        if session.canAddOutput(output) {
-            session.addOutput(output)
+        let forwarder = SampleBufferForwarder { [weak self] buffer in
+            stream.append(buffer)
+            self?.reportLevel(buffer)
         }
-
+        output.setSampleBufferDelegate(forwarder, queue: DispatchQueue(label: "com.meetingscribe.mic"))
+        if session.canAddOutput(output) { session.addOutput(output) }
+        micDelegate = forwarder
+        micSession = session
         session.startRunning()
-
-        // Start recognition task for mic audio with SEPARATE recognizer
-        if let recognizer = micSpeechRecognizer {
-            micRecognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-                guard let self = self else { return }
-                if let result = result {
-                    if result.isFinal {
-                        self.processSegments(result.bestTranscription.segments, source: "mic")
-                        DispatchQueue.main.async { self.transcription = self.formatSpeakerOutput() }
-                    }
-                }
-                if let error = error as NSError?, error.code != 301 {
-                    self.log("Mic recognition error: \(error.localizedDescription) (\(error.code))")
-                }
-            }
-            log("Mic recognition task started with separate recognizer")
-        }
-
-        session.startRunning()
-        log("Mic AVCaptureSession started")
     }
 
-    @available(macOS 12.3, *)
-    func stopScreenCapture(manager: ScreenCaptureManager) async {
-        log("Stop screen capture called")
-        rotationTimer?.invalidate(); rotationTimer = nil
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        recognitionRequest = nil
-        recognitionTask = nil
-        micRecognitionRequest?.endAudio()
-        micRecognitionTask?.cancel()
-        micRecognitionRequest = nil
-        micRecognitionTask = nil
-        mixerNode?.removeTap(onBus: 0)
-        mixerNode = nil
+    private func tearDownAudio() async {
         audioEngine?.stop()
         audioEngine = nil
-        micCaptureSession?.stopRunning()
-        micCaptureSession = nil
-        micAudioInput = nil
-        await manager.stopCapture()
-        await MainActor.run {
-            self.isRecording = false
-        }
-        log("Screen capture stopped, transcription length: \(transcription.count)")
+        micSession?.stopRunning()
+        micSession = nil
+        micDelegate = nil
+        screenCapture.onAudioBuffer = nil
+        await screenCapture.stopCapture()
     }
 
     // MARK: - CoreAudio device selection
 
-    private func findDeviceID(containing name: String) -> String? {
-        availableDevices.first(where: { $0.localizedName.contains(name) })?.uniqueID
+    private func findDeviceUID(containing name: String) -> String? {
+        availableDevices.first { $0.localizedName.contains(name) }?.uniqueID
     }
 
-    private func setEngineInputDevice(_ uniqueID: String, engine: AVAudioEngine) {
+    private func setInputDevice(_ uid: String, engine: AVAudioEngine) {
         guard let audioUnit = engine.inputNode.audioUnit else { return }
-
-        var deviceID = kAudioObjectUnknown
-        let uidPtr = UnsafeMutablePointer<CFString?>.allocate(capacity: 1)
-        uidPtr.pointee = uniqueID as CFString
-        defer { uidPtr.deallocate() }
-
-        var translation = AudioValueTranslation(
-            mInputData: UnsafeMutableRawPointer(uidPtr),
-            mInputDataSize: UInt32(MemoryLayout<CFString>.size),
-            mOutputData: &deviceID,
-            mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size)
-        )
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDeviceForUID,
+            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var size = UInt32(MemoryLayout<AudioValueTranslation>.size)
-        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &translation)
-
+        var cfUID = uid as CFString
+        var deviceID = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = withUnsafePointer(to: &cfUID) {
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address,
+                                       UInt32(MemoryLayout<CFString>.size), $0, &size, &deviceID)
+        }
         guard status == noErr, deviceID != kAudioObjectUnknown else {
-            log("Could not resolve UID \(uniqueID), using default")
+            logger.error("Could not resolve device UID, using default")
             return
         }
-
-        var devID = deviceID
-        let result = AudioUnitSetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice,
-                                          kAudioUnitScope_Global, 0,
-                                          &devID, UInt32(MemoryLayout<AudioDeviceID>.size))
-        log(result == noErr
-            ? "Engine input set to AudioDeviceID \(deviceID)"
-            : "Failed to set device, status: \(result)")
+        let result = AudioUnitSetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global,
+                                          0, &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+        if result != noErr { logger.error("Failed to set input device: \(result)") }
     }
 }
 
-// MARK: - Mic Audio Delegate
-
-private class MicAudioDelegate: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
-    let request: SFSpeechAudioBufferRecognitionRequest
-    weak var recorder: MeetingRecorder?
-
-    init(request: SFSpeechAudioBufferRecognitionRequest, recorder: MeetingRecorder) {
-        self.request = request
-        self.recorder = recorder
-    }
-
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let audioBuffer = sampleBuffer.toAVAudioPCMBuffer() else { return }
-        request.append(audioBuffer)
-    }
+struct RecorderError: LocalizedError {
+    let errorDescription: String?
+    init(_ message: String) { errorDescription = message }
 }
 
-// MARK: - CMSampleBuffer extension
+// MARK: - One recognition stream per audio source
 
-extension CMSampleBuffer {
-    func toAVAudioPCMBuffer() -> AVAudioPCMBuffer? {
-        guard let formatDescription = CMSampleBufferGetFormatDescription(self),
-              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
-            return nil
+/// Wraps SFSpeechRecognizer request/task pairs for a single audio source.
+/// Each utterance gets its own request; a new one opens when the speaker pauses, after 50 s,
+/// or when the recognizer gives up. The previous request is ended (not cancelled) so its final text still arrives.
+/// Recognition callbacks arrive on the main queue (SFSpeechRecognizer.queue default); `append` is called from audio threads.
+private final class RecognitionStream {
+    let source: TranscriptEntry.Source
+    var onPartial: (TranscriptEntry) -> Void = { _ in }
+    var onFinal: (TranscriptEntry) -> Void = { _ in }
+
+    private let recognizer: SFSpeechRecognizer
+    private let lock = NSLock()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
+    private var generation = 0
+    private var running = false
+    private var currentText = ""
+    private var openedAt = Date()
+    private var lastChange = Date()
+
+    // ponytail: pause/length thresholds are guesses; tune if entries split mid-sentence or run too long
+    private let pauseToSegment: TimeInterval = 1.6
+    private let maxUtterance: TimeInterval = 50
+
+    init(source: TranscriptEntry.Source, recognizer: SFSpeechRecognizer) {
+        self.source = source
+        self.recognizer = recognizer
+    }
+
+    func start() {
+        running = true
+        openRequest()
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock(); let r = request; lock.unlock()
+        r?.append(buffer)
+    }
+
+    func segmentIfPaused() {
+        guard running else { return }
+        let now = Date()
+        if (!currentText.isEmpty && now.timeIntervalSince(lastChange) > pauseToSegment)
+            || now.timeIntervalSince(openedAt) > maxUtterance {
+            openRequest()
         }
+    }
 
-        let frameCount = CMSampleBufferGetNumSamples(self)
-        guard frameCount > 0 else { return nil }
+    func stop() {
+        running = false
+        generation += 1  // ignore late callbacks; caller commits the last partial itself
+        lock.lock(); let r = request; request = nil; lock.unlock()
+        r?.endAudio()
+        task?.cancel()
+        task = nil
+    }
 
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: AVAudioFormat(streamDescription: asbd)!,
-                                               frameCapacity: AVAudioFrameCount(frameCount)) else {
-            return nil
-        }
+    private func openRequest() {
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        req.requiresOnDeviceRecognition = true
+        req.addsPunctuation = true
+        lock.lock(); let old = request; request = req; lock.unlock()
+        old?.endAudio()  // let the old task deliver its final result
 
-        pcmBuffer.frameLength = AVAudioFrameCount(frameCount)
+        generation += 1
+        let gen = generation
+        let entryID = UUID()
+        var startedAt: Date?
+        var lastText = ""
+        currentText = ""
+        openedAt = Date()
+        lastChange = Date()
 
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(self) else { return nil }
-
-        var length = 0
-        var dataPointer: UnsafeMutablePointer<Int8>?
-        CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &dataPointer)
-
-        guard let data = dataPointer else { return nil }
-
-        if let channelData = pcmBuffer.floatChannelData {
-            let bytesPerFrame = Int(asbd.pointee.mBytesPerFrame)
-            for channel in 0..<Int(asbd.pointee.mChannelsPerFrame) {
-                let channelPtr = channelData[channel]
-                for frame in 0..<frameCount {
-                    let offset = frame * bytesPerFrame + channel * MemoryLayout<Float>.size
-                    if offset + MemoryLayout<Float>.size <= length {
-                        channelPtr[frame] = data.advanced(by: offset).withMemoryRebound(to: Float.self, capacity: 1) { $0.pointee }
-                    }
+        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
+            guard let self else { return }
+            let isCurrent = gen == self.generation
+            if let result {
+                let text = result.bestTranscription.formattedString
+                if startedAt == nil, !text.isEmpty { startedAt = Date() }
+                lastText = text
+                let entry = TranscriptEntry(id: entryID, source: self.source, date: startedAt ?? Date(), text: text)
+                if result.isFinal {
+                    self.onFinal(entry)
+                    if isCurrent && self.running { self.openRequest() }
+                } else if isCurrent {
+                    if text != self.currentText { self.currentText = text; self.lastChange = Date() }
+                    self.onPartial(entry)
+                }
+            } else if let error = error as NSError? {
+                // Task ended without a final (e.g. 1110 "no speech detected"): keep any partial, reopen.
+                if !lastText.isEmpty {
+                    self.onFinal(TranscriptEntry(id: entryID, source: self.source, date: startedAt ?? Date(), text: lastText))
+                }
+                guard isCurrent, self.running else { return }
+                logger.debug("Recognition ended: \(error.code)")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self, self.running, gen == self.generation else { return }
+                    self.openRequest()
                 }
             }
         }
+    }
+}
 
-        return pcmBuffer
+// MARK: - Audio plumbing
+
+private final class SampleBufferForwarder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    let handler: (AVAudioPCMBuffer) -> Void
+    init(_ handler: @escaping (AVAudioPCMBuffer) -> Void) { self.handler = handler }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        sampleBuffer.toPCMBuffer().map(handler)
+    }
+}
+
+extension CMSampleBuffer {
+    /// Handles interleaved and non-interleaved, float and int formats (ScreenCaptureKit delivers non-interleaved float).
+    func toPCMBuffer() -> AVAudioPCMBuffer? {
+        guard let desc = formatDescription else { return nil }
+        let format = AVAudioFormat(cmAudioFormatDescription: desc)
+        let frames = AVAudioFrameCount(numSamples)
+        guard frames > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return nil }
+        buffer.frameLength = frames
+        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(self, at: 0, frameCount: Int32(frames),
+                                                                  into: buffer.mutableAudioBufferList)
+        return status == noErr ? buffer : nil
     }
 }

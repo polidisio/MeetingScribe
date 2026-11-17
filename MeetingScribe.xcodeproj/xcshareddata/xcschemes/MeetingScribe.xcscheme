@@ -53,6 +53,17 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "2DF533531E04693336ABF808"
+               BuildableName = "MeetingScribeTests.xctest"
+               BlueprintName = "MeetingScribeTests"
+               ReferencedContainer = "container:MeetingScribe.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

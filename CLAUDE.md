@@ -26,29 +26,16 @@ xcodebuild test -project MeetingScribe.xcodeproj -scheme MeetingScribe -only-tes
 
 ### Core Components
 
-- **MeetingRecorder** (`MeetingScribe/MeetingRecorder.swift`) - Audio capture and speech recognition. Uses `AVAudioEngine` + `SFSpeechRecognizer` with `requiresOnDeviceRecognition = true` for privacy.
-- **AppDelegate** - Creates `NSStatusItem` menu bar icon and `NSPopover` containing SwiftUI UI.
-- **ContentView** - SwiftUI interface with record/stop button and export options (clipboard, file, send to Aria).
-
-### Data Flow
-
-```
-Microphone → AVAudioEngine.inputNode.installTap() → SFSpeechAudioBufferRecognitionRequest → SFSpeechRecognizer.recognitionTask()
-                                                                                                              ↓
-                                                                                                    @Published transcription (ObservableObject)
-                                                                                                              ↓
-                                                                                                    ContentView (SwiftUI binding via @ObservedObject)
-```
-
-### Recording States
-
-- `.idle` - No active recording
-- `.recording` - Audio engine running, partial results streaming
-- `.transcribed` - Recording stopped, transcription available for export
+- **MeetingRecorder** (`MeetingScribe/MeetingRecorder.swift`) - `@MainActor` state + capture. Mic mode: one `AVAudioEngine` (mixer → mono tap) → stream `.room`. App mode: ScreenCaptureKit app audio → `.remote` + `AVCaptureSession` mic → `.me`. `requiresOnDeviceRecognition = true` always; refuses to start if no on-device model. `toggle()` is the single entry point (UI, menu, ⌥⌘R hot key).
+- **RecognitionStream** (same file) - one per audio source. New request per utterance (pause 1.6 s / 50 s cap / recognizer gave up); old request gets `endAudio()` (not cancel) so its final text still arrives.
+- **Transcript** (`Transcript.swift`) - `TranscriptEntry` (source Tú/Remoto/none, date, text), plain text + Markdown formatting, `TranscriptStore` autosave/history in `~/Library/Application Support/MeetingScribe/Transcripts/`.
+- **ScreenCaptureManager** - app-level `SCContentFilter` (works with minimised windows), meeting apps listed first.
+- **AppDelegate** - status item derived from `recorder.$isRecording` (red dot + elapsed time), right-click menu, Carbon hot key ⌥⌘R.
+- **ContentView** - popover UI: chat-style transcript, level meter, record button, history, permissions card, toasts.
 
 ### Speech Recognition Locale
 
-Default locale is Spanish (`es-ES`). To add English support, modify `setupSpeechRecognizer()` in MeetingRecorder.swift line 24.
+Selectable in the gear menu (`MeetingRecorder.languages`), persisted in UserDefaults `language` (default `es-ES`).
 
 ## Key Implementation Details
 
@@ -59,14 +46,14 @@ Default locale is Spanish (`es-ES`). To add English support, modify `setupSpeech
 
 ## Export Options
 
-- **Copy Transcription** - Copies to NSPasteboard
-- **Save to File** - NSSavePanel with .plainText type, filename `transcription_YYYY-MM-dd_HHmmss.txt`
-- **Send to Aria** - Currently copies to clipboard only; roadmap includes real Telegram bot integration
+- **Autosave** - every stopped recording → Markdown in Application Support (history view)
+- **Copiar** - plain text with timestamps and speaker labels
+- **Exportar** - NSSavePanel, `.md` (Markdown) or `.txt`
+- **Aria** - copies to clipboard only; roadmap includes real Telegram bot integration
 
 ## Known Limitations
 
-- Uses default system microphone only
-- For Zoom/Teams/System audio capture, BlackHole virtual audio driver is needed (roadmap item)
+- App mode captures meeting audio via ScreenCaptureKit (no BlackHole needed); without headphones the mic also picks up remote voices → duplicated "Tú" lines
 - AirPods recommended in noisy environments
 
 ## Roadmap (from README)
@@ -74,5 +61,4 @@ Default locale is Spanish (`es-ES`). To add English support, modify `setupSpeech
 - [ ] BlackHole support for system audio
 - [ ] Export to PDF
 - [ ] Aria Telegram bot integration for AI summaries
-- [ ] Keyboard shortcuts
 - [ ] Transcription history
