@@ -162,15 +162,19 @@ struct ContentView: View {
             ActionButton(title: "Copiar", systemName: "doc.on.doc") {
                 copy(recorder.transcription); showToast("Copiado")
             }
-            ActionButton(title: "Exportar", systemName: "square.and.arrow.up", action: saveToFile)
+            ActionButton(title: "Guardar", systemName: "square.and.arrow.down", action: saveToFile)
             if let url = recorder.lastSavedURL {
                 ActionButton(title: "Ver", systemName: "folder") {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 }
             }
-            ActionButton(title: "Aria", systemName: "paperplane.fill", prominent: true) {
-                copy(recorder.transcription); showToast("Copiado · pégalo en Telegram")
+            // System share sheet: Mail, Mensajes, Notas, Telegram, apps de IA (ChatGPT, Claude…), AirDrop
+            ShareLink(item: recorder.transcript.markdown, subject: Text("Transcripción de reunión")) {
+                ActionLabel(title: "Compartir", systemName: "square.and.arrow.up")
             }
+            .buttonStyle(.bordered)
+            .tint(.purple)
+            .help("Compartir con otra app")
             ActionButton(title: "Nueva", systemName: "plus") { recorder.reset() }
         }
         .padding(.horizontal, 12).padding(.bottom, 10)
@@ -547,19 +551,24 @@ private struct IconButton: View {
 private struct ActionButton: View {
     let title: String
     let systemName: String
-    var prominent = false
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: systemName).font(.system(size: 14, weight: .medium))
-                Text(title).font(.caption2)
-            }
-            .frame(maxWidth: .infinity).padding(.vertical, 6)
+        Button(action: action) { ActionLabel(title: title, systemName: systemName) }
+            .buttonStyle(.bordered)
+            .help(title)
+    }
+}
+
+private struct ActionLabel: View {
+    let title: String
+    let systemName: String
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Image(systemName: systemName).font(.system(size: 14, weight: .medium))
+            Text(title).font(.caption2)
         }
-        .buttonStyle(.bordered)
-        .tint(prominent ? .purple : nil)
-        .help(title)
+        .frame(maxWidth: .infinity).padding(.vertical, 6)
     }
 }

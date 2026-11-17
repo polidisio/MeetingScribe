@@ -49,8 +49,8 @@ Selectable in the gear menu (`MeetingRecorder.languages`), persisted in UserDefa
 
 - **Autosave** - every stopped recording → Markdown in Application Support (history view)
 - **Copiar** - plain text with timestamps and speaker labels
-- **Exportar** - NSSavePanel, `.md` (Markdown) or `.txt`
-- **Aria** - copies to clipboard only; roadmap includes real Telegram bot integration
+- **Guardar** - NSSavePanel, `.md` (Markdown) or `.txt`
+- **Compartir** - SwiftUI `ShareLink` (system share sheet: Mail, Notes, Telegram, AI apps…)
 
 ## Known Limitations
 
@@ -61,5 +61,5 @@ Selectable in the gear menu (`MeetingRecorder.languages`), persisted in UserDefa
 
 - [ ] BlackHole support for system audio
 - [ ] Export to PDF
-- [ ] Aria Telegram bot integration for AI summaries
+- [ ] AI summaries
 - [ ] Transcription history
