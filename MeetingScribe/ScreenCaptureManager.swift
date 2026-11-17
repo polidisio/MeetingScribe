@@ -32,20 +32,29 @@ final class ScreenCaptureManager: NSObject, ObservableObject {
             }
         await MainActor.run {
             availableApps = apps
-            // Keep the previous choice if the app is still running, else preselect the first meeting app.
+            // Keep the previous choice if still running; otherwise nil = all system audio (works with any app).
             selectedApp = apps.first { $0.bundleIdentifier == selectedApp?.bundleIdentifier }
-                ?? apps.first { Self.meetingApps.contains($0.bundleIdentifier) }
         }
     }
 
-    func startCapture(app: SCRunningApplication) async throws {
+    /// `app == nil` captures all system audio except our own.
+    func startCapture(app: SCRunningApplication?) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        guard let display = content.displays.first,
-              let target = content.applications.first(where: { $0.processID == app.processID }) else {
-            throw RecorderError("\(app.applicationName) ya no está abierta.")
+        guard let display = content.displays.first else { throw RecorderError("No se encontró ninguna pantalla.") }
+        let filter: SCContentFilter
+        if let app {
+            // Include helper processes too: Teams/Chrome/Zoom play call audio from helpers (com.microsoft.teams2.helper…).
+            let id = app.bundleIdentifier
+            let targets = content.applications.filter { $0.bundleIdentifier == id || $0.bundleIdentifier.hasPrefix(id + ".") }
+            guard !targets.isEmpty else { throw RecorderError("\(app.applicationName) ya no está abierta.") }
+            logger.info("Capturing \(targets.map(\.bundleIdentifier), privacy: .public)")
+            // App-level filter: audio keeps flowing even if the meeting window is minimised or on another Space.
+            filter = SCContentFilter(display: display, including: targets, exceptingWindows: [])
+        } else {
+            let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+            filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+            logger.info("Capturing all system audio")
         }
-        // App-level filter: audio keeps flowing even if the meeting window is minimised or on another Space.
-        let filter = SCContentFilter(display: display, including: [target], exceptingWindows: [])
 
         let config = SCStreamConfiguration()
         config.capturesAudio = true
@@ -60,7 +69,6 @@ final class ScreenCaptureManager: NSObject, ObservableObject {
         try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: DispatchQueue(label: "com.meetingscribe.appaudio"))
         try await stream.startCapture()
         self.stream = stream
-        logger.info("Capturing audio from \(app.applicationName, privacy: .public)")
     }
 
     func stopCapture() async {

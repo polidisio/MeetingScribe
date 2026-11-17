@@ -99,7 +99,8 @@ struct ContentView: View {
 
             if recorder.captureMode == .app {
                 Picker("", selection: appBinding) {
-                    if screenCapture.availableApps.isEmpty { Text("Sin apps").tag("") }
+                    Text("Todo el audio del sistema").tag("")
+                    Divider()
                     ForEach(screenCapture.availableApps, id: \.bundleIdentifier) {
                         Text($0.applicationName).tag($0.bundleIdentifier)
                     }
@@ -277,7 +278,7 @@ private struct TranscriptView: View {
                 AppBadge(size: 56)
                 Text("Listo para transcribir").font(.title3.weight(.semibold))
                 Text(recorder.captureMode == .app
-                     ? "Elige la app de la reunión y pulsa grabar.\nTu voz y la de los demás se separan automáticamente."
+                     ? "Pulsa grabar: se captura el audio de la reunión y tu micrófono por separado.\nUsa auriculares para no duplicar voces."
                      : "Pulsa el botón rojo o usa ⌥⌘R desde cualquier app.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 PermissionsCard(needsScreen: recorder.captureMode == .app).padding(.top, 6)

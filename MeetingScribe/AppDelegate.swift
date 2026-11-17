@@ -26,7 +26,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
-        popover.contentViewController = NSHostingController(rootView: ContentView(recorder: recorder))
+        // Fixed size: if the hosting controller drives the size, the popover resizes after it is shown
+        // and AppKit places it partly above the screen.
+        let host = NSHostingController(rootView: ContentView(recorder: recorder))
+        host.sizingOptions = []
+        popover.contentViewController = host
+        popover.contentSize = NSSize(width: 400, height: 560)
 
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             MainActor.assumeIsolated {

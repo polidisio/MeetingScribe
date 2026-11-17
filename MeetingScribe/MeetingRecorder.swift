@@ -262,18 +262,21 @@ final class MeetingRecorder: NSObject, ObservableObject {
     // MARK: - App mode (ScreenCaptureKit app audio = Remoto, microphone = Tú)
 
     private func startAppMode() async throws {
-        guard let app = screenCapture.selectedApp else {
-            throw RecorderError("Elige la app de la reunión (Zoom, Teams, Chrome…).")
-        }
         guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
             fail("Concede «Grabación de pantalla y audio del sistema» a MeetingScribe y vuelve a abrir la app.",
                  pane: "Privacy_ScreenCapture")
             throw RecorderError("Permiso de grabación de pantalla denegado.")
         }
-        sessionSource = "\(app.applicationName) + micrófono"
+        let app = screenCapture.selectedApp  // nil = all system audio
+        sessionSource = "\(app?.applicationName ?? "Audio del sistema") + micrófono"
 
         let remote = try makeStream(.remote)
+        var buffers = 0
         screenCapture.onAudioBuffer = { [weak self] buffer in
+            buffers += 1
+            if buffers == 1 || buffers % 500 == 0 {
+                logger.info("App audio buffers: \(buffers), level \(Self.level(of: buffer))")
+            }
             remote.append(buffer)
             self?.reportLevel(buffer)
         }
